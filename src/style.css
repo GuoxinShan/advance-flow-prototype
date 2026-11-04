@@ -213,3 +213,35 @@ blockquote{margin:6px 0 0;padding:4px 8px;border-left:2px solid var(--lingee);ba
 .set-meta{font-size:12px;color:var(--mut);padding:2px 0 8px;border-bottom:1px dashed var(--line2)}
 .obj-row{margin-top:8px;font-size:12px}
 .obj-row select{margin-left:6px;height:26px;border-radius:6px;border:1px solid var(--line)}
+
+
+/* ===== board-first UX ===== */
+.flow-stepper{display:flex;align-items:center;gap:10px;padding:4px 10px;border-radius:999px;background:rgba(73,93,255,.06);border:1px solid rgba(73,93,255,.14)}
+.flow-label{font-size:11px;color:var(--p);font-weight:600;white-space:nowrap}
+.flow-stepper ol{list-style:none;margin:0;padding:0;display:flex;align-items:center;gap:0}
+.flow-stepper li{display:flex;align-items:center;gap:6px;color:var(--weak);font-size:12px;position:relative}
+.flow-stepper li>b{width:18px;height:18px;border-radius:50%;background:var(--faint);font:600 10px/18px var(--mono);text-align:center}
+.flow-stepper li.past{color:var(--fg2)}.flow-stepper li.past>b{background:#d9f2e5;color:#0b7a4b}
+.flow-stepper li.cur{color:var(--p);font-weight:600}.flow-stepper li.cur>b{background:var(--p);color:#fff}
+.flow-sep{width:18px;height:1px;background:var(--line);margin:0 4px;display:inline-block}
+
+.back-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:8px 12px;border-radius:10px;background:linear-gradient(90deg,#eef1ff,#f8f7ff);border:1px solid rgba(73,93,255,.14)}
+
+.ov-mask{position:fixed;inset:0;z-index:35;background:rgba(20,24,40,.4);backdrop-filter:blur(6px);display:flex;justify-content:center;align-items:flex-start;padding:6vh 16px 24px;overflow:auto}
+.ov-panel{width:min(760px,96vw);max-height:88vh;overflow:auto;border-radius:16px;background:var(--glass2);border:1px solid rgba(255,255,255,.8);box-shadow:0 24px 80px rgba(40,30,90,.28);padding:14px 16px 18px;animation:rise .2s ease}
+.ov-panel.wide{width:min(1080px,96vw)}
+.ov-head{display:flex;align-items:center;gap:12px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line2)}
+.ov-head h3{margin:0;font-size:15px;flex:1}
+.ov-body .vhead{margin-top:0}
+
+.lingee-fab{position:fixed;right:24px;bottom:24px;z-index:30;height:44px;padding:0 16px;border-radius:999px;border:1px solid rgba(107,92,255,.3);background:linear-gradient(180deg,#fff,#f6f5ff);color:#3d31b5;box-shadow:var(--glow);display:inline-flex;align-items:center;gap:6px;font-size:14px}
+
+.lingee-rail{width:320px;display:flex;flex-direction:column;max-height:calc(100vh - 90px)}
+.lr-chat{flex:1;min-height:120px;max-height:280px;overflow:auto;margin-top:10px;padding-top:8px;border-top:1px dashed rgba(107,92,255,.18);display:flex;flex-direction:column;gap:8px}
+.lr-chat-label{font-size:11px;color:var(--lingee);font-weight:600}
+.lr-chat-empty{font-size:12px;color:var(--weak);padding:8px 0}
+.lr-chat .bubble{max-width:100%}
+.lr-chat .bubble p{font-size:12px;line-height:18px}
+.rail-input{margin-top:8px;height:40px}
+
+.board-main{position:relative}
