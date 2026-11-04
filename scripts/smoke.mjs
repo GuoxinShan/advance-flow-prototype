@@ -19,12 +19,12 @@ const moreNav = async t => {
 }
 await p.goto('http://localhost:4173/'); await p.evaluate(() => localStorage.clear()); await p.reload(); await p.waitForTimeout(400)
 
-// 默认主场：英雄文案 + 一条示例 + 具体动词 CTA + 首跑提示，无入口墙
+// 默认主场：英雄文案 + 空看板 + 具体动词 CTA + 首跑提示，无入口墙 / 无示例抢焦点
 await shot('01-focus-home')
 await p.locator('[data-testid=flow-stepper]').waitFor()
 await p.locator('[data-testid=board-hero]').waitFor()
 const heroText = await p.locator('[data-testid=board-hero]').innerText()
-if (!heroText.includes('今天要你动手的事') || !heroText.includes('先建一条任务')) {
+if (!heroText.includes('今天要你动手的事') || (!heroText.includes('新建一条任务') && !heroText.includes('先建一条任务'))) {
   console.error('FAIL: hero missing', heroText); process.exitCode = 1
 }
 await p.locator('[data-testid=first-run-tip]').waitFor()
@@ -41,9 +41,23 @@ if (!nextLabel.includes('新建')) {
   console.error('FAIL: home CTA should be concrete create verb', nextLabel); process.exitCode = 1
 }
 const frows = await p.locator('[data-testid=frow]').count()
-if (frows !== 1) { console.error('FAIL: expect exactly 1 sample focus row, got', frows); process.exitCode = 1 }
-await p.locator('[data-testid=sample-tag]').waitFor()
+if (frows !== 0) { console.error('FAIL: home should be empty board (no seed row stealing focus), got', frows); process.exitCode = 1 }
+await p.locator('[data-testid=board-empty]').waitFor()
+const emptyText = await p.locator('[data-testid=board-empty]').innerText()
+if (!emptyText.includes('新建一条任务') && !emptyText.includes('还没有')) {
+  console.error('FAIL: empty copy should point to create', emptyText); process.exitCode = 1
+}
 await p.locator('[data-testid=hero-demo]').waitFor()
+if (await p.locator('[data-testid=demo]').count()) {
+  console.error('FAIL: header demo duplicate should be gone'); process.exitCode = 1
+}
+const flowText = await p.locator('[data-testid=flow-stepper]').innerText()
+for (const lab of ['建任务', '闲聊', '讨论拆', '确认', '验收']) {
+  if (!flowText.includes(lab)) { console.error('FAIL: flow missing label', lab, flowText); process.exitCode = 1 }
+}
+await p.locator('.role-label').waitFor()
+const roleLabel = await p.locator('.role-label').innerText()
+if (!roleLabel.includes('当前身份')) { console.error('FAIL: role label', roleLabel); process.exitCode = 1 }
 const entryWall = await p.locator('[data-testid=entry-direct]').count()
 if (entryWall) { console.error('FAIL: entry cards should be gone'); process.exitCode = 1 }
 const railOpen = await p.locator('[data-testid=lingee-rail]').count()
@@ -53,13 +67,17 @@ await click('[data-testid=tip-dismiss]')
 if (await p.locator('[data-testid=first-run-tip]').count()) {
   console.error('FAIL: tip should dismiss'); process.exitCode = 1
 }
+await click('[data-testid=more-btn]')
+await click('[data-testid=show-tip]')
+await p.locator('[data-testid=first-run-tip]').waitFor()
+await click('[data-testid=tip-dismiss]')
 
 // 下一步 → 新建浮层
 await click('[data-testid=next-step]'); await shot('01a-create-direct')
 await p.fill('[data-testid=create-title]', '巡检表字段精简到 12 项')
 await p.fill('[data-testid=create-quote]', '阿炜说周五前出新版字段')
 await click('[data-testid=create-submit]'); await shot('01b-direct-landed')
-const afterCreate = await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('advance-flow-v6')); return { view: s.view, overlay: s.overlay, flowStep: s.flowStep } })
+const afterCreate = await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('advance-flow-v7')); return { view: s.view, overlay: s.overlay, flowStep: s.flowStep } })
 console.log('after create', afterCreate)
 const afterCreateCta = (await p.locator('[data-testid=next-step]').innerText()).trim()
 console.log('after create CTA:', afterCreateCta)
@@ -67,7 +85,7 @@ if (afterCreateCta === '下一步' || afterCreateCta.startsWith('下一步')) {
   console.error('FAIL: CTA still uses 下一步 prefix', afterCreateCta); process.exitCode = 1
 }
 const afterRows = await p.locator('[data-testid=frow]').count()
-if (afterRows < 2) { console.error('FAIL: created task should appear on board for creator, rows=', afterRows); process.exitCode = 1 }
+if (afterRows < 1) { console.error('FAIL: created task should appear on board for creator, rows=', afterRows); process.exitCode = 1 }
 await shot('01c-create-visible')
 
 // 开讨论：灵基气泡 → 会后从速记拆
@@ -116,7 +134,7 @@ await p.keyboard.press('Escape')
 await p.keyboard.press('Meta+k')
 await shot('15-cmdk')
 await click('[data-testid=cmd-sug]'); await p.waitForTimeout(600); await shot('16-chat-land')
-const chatState = await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('advance-flow-v6')); return { view: s.view, overlay: s.overlay, chat: s.chat?.length } })
+const chatState = await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('advance-flow-v7')); return { view: s.view, overlay: s.overlay, chat: s.chat?.length } })
 console.log('after cmdk chat', chatState)
 await click('[data-testid=chat-pill]'); await p.waitForTimeout(500); await shot('17-chat-end')
 await click('[data-testid=dispatch]'); await shot('18-chat-dispatched')
@@ -134,8 +152,8 @@ await p.waitForTimeout(3500); await shot('20-steno-room')
 await click('[data-testid=end]'); await shot('21-steno-end')
 
 await p.evaluate(() => localStorage.clear()); await p.reload(); await p.waitForTimeout(300)
-await click('[data-testid=demo]'); await p.waitForTimeout(48000); await shot('14-auto-demo-end')
-const st = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('advance-flow-v6')) } catch { return null } })
+await click('[data-testid=hero-demo]'); await p.waitForTimeout(48000); await shot('14-auto-demo-end')
+const st = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('advance-flow-v7')) } catch { return null } })
 console.log('demo end view:', st?.view, 'overlay:', st?.overlay, 'flowStep:', st?.flowStep, 'step:', st?.step)
 console.log('page errors:', errs)
 if (errs.length) process.exitCode = 1

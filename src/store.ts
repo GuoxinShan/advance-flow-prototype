@@ -36,7 +36,7 @@ export type View = 'focus' | 'calendar' | 'steno' | 'tasks' | 'yzj'
 export type Overlay = null | 'create' | 'chat' | 'room' | 'end'
 export type FlowStep = 1 | 2 | 3 | 4 | 5
 export const FLOW_STEPS: { n: FlowStep; name: string }[] = [
-  { n: 1, name: '直接建' },
+  { n: 1, name: '建任务' },
   { n: 2, name: '闲聊' },
   { n: 3, name: '讨论拆' },
   { n: 4, name: '确认' },
@@ -95,8 +95,6 @@ const seedTasks = (): Task[] => [
     consensus: ['先试点 3 家店', '表单精简优先'],
   },
   { id: 'adv_1188', title: 'Q4 门店评分口径复核', assignee: '张三', creator: '刘洋', state: 'in_progress', due: '2026-11-03', kind: 'task', comments: [], source: { type: 'steno', ref: SOURCE_KEY, line: 0, label: '来自速记「上周巡检对齐」' } },
-  // 首页只露出这一条 focus 行，让新人一眼看到「要动手」的样子
-  { id: 'adv_1190', title: '供应商对账异常排查', assignee: '', creator: '刘洋', state: 'suggested', due: '2026-11-06', kind: 'task', comments: [], sample: true },
   { id: 'adv_1195', title: '巡检 App 崩溃率周报', assignee: '老王', creator: '张三', state: 'suggested', due: '2026-11-05', kind: 'task', comments: [], source: { type: 'steno', ref: SOURCE_KEY, line: 2, label: '来自速记「上周巡检对齐」' } },
 ]
 

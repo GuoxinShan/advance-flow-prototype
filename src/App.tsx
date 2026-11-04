@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState, useCallback } from 'react'
 import { A, ADV_ID, FLOW_STEPS, FlowStep, initial, Overlay, reduce, ROLES, S, STATE_CN, Task, TODAY, TRANSCRIPT, WEEK, focusRows, FocusRow, Who, TState, STENO_ID } from './store'
 
-const KEY = 'advance-flow-v6'
+const KEY = 'advance-flow-v7'
 type H = { cur: S; past: S[] }
 function hreduce(h: H, a: A | { type: 'undo' }): H {
   if (a.type === 'undo') return h.past.length ? { cur: { ...h.past[0], toast: '已撤销' }, past: h.past.slice(1) } : h
@@ -49,7 +49,7 @@ export function nextStep(s: S): { id: string; label: string; run: (dispatch: (a:
   const due = first('到期')
   if (due) return { id: 'due', label: '提交验收', run: d => d({ type: 'setState', id: due.task.id, state: 'in_review' }) }
   const lingeeDoing = s.tasks.find(t => t.assignee === '灵基' && t.kind === 'minutes' && t.state === 'in_progress')
-  if (lingeeDoing) return { id: 'lingeeSubmit', label: '（模拟）灵基写完', run: d => d({ type: 'lingeeSubmit', id: lingeeDoing.id }) }
+  if (lingeeDoing) return { id: 'lingeeSubmit', label: '生成纪要稿', run: d => d({ type: 'lingeeSubmit', id: lingeeDoing.id }) }
 
   // 三条入口按链路发现，不并排三张卡
   const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
@@ -121,19 +121,22 @@ export default function App() {
               {archives.filter(([v]) => v !== 'focus').map(([v, n]) =>
                 <button key={v} data-testid={`nav-${v}`} onClick={() => { dispatch({ type: 'view', view: v }); setMoreOpen(false) }}>{n}</button>)}
               <button data-testid="chain-toggle" onClick={() => { setChainOpen(v => !v); setMoreOpen(false) }}>{chainOpen ? '收起链路' : '看链路细节'}</button>
+              {!tipOn && <button data-testid="show-tip" onClick={() => { try { localStorage.removeItem('advance-flow-tip-v1') } catch {} setTipOn(true); setMoreOpen(false) }}>显示用法</button>}
               <button onClick={() => { d({ type: 'undo' }); setMoreOpen(false) }} disabled={!h.past.length}>撤销</button>
               <button onClick={() => { localStorage.removeItem(KEY); dispatch({ type: 'reset' }); setMoreOpen(false) }}>一键重置</button>
             </div>}
           </div>
-          <div className="menu-wrap">
+          <div className="menu-wrap role-wrap">
+            <span className="role-label">当前身份</span>
             <button className="ghost sm role-btn" data-testid="role-menu" onClick={() => { setRoleOpen(v => !v); setMoreOpen(false) }}>
               <Av who={s.role} s="s20" />{s.role}
             </button>
+            <span className="role-hint" data-testid="role-hint">切换身份可看确认/验收</span>
             {roleOpen && <div className="menu glass" data-testid="role-menu-panel">
+              <p className="role-tip">演示切换身份，才能看到确认 / 验收</p>
               {ROLES.map(r => <button key={r.name} data-testid={`role-${r.name}`} className={s.role === r.name ? 'on' : ''} onClick={() => { dispatch({ type: 'role', role: r.name }); setRoleOpen(false) }}><Av who={r.name} s="s20" />{r.name}<small>{r.tag}</small></button>)}
             </div>}
           </div>
-          <button className="ghost sm" data-testid="demo" onClick={() => { if (!s.demo) { localStorage.removeItem(KEY); dispatch({ type: 'reset' }) } setTimeout(() => dispatch({ type: 'demo', on: !s.demo }), 50) }}>{s.demo ? '停止' : '看一遍怎么用'}</button>
         </div>
       </header>
 
@@ -193,7 +196,12 @@ function overlayTitle(o: Exclude<Overlay, null | 'chat'>) {
 
 function FlowDots({ flowStep }: { flowStep: FlowStep }) {
   return <div className="flow-dots" data-testid="flow-stepper" aria-label="进度">
-    {FLOW_STEPS.map(st => <i key={st.n} className={st.n === flowStep ? 'cur' : st.n < flowStep ? 'past' : ''} title={st.name} />)}
+    {FLOW_STEPS.map(st => (
+      <span key={st.n} className={`flow-step ${st.n === flowStep ? 'cur' : st.n < flowStep ? 'past' : ''}`} data-step={st.n}>
+        <i aria-hidden />
+        <em>{st.name}</em>
+      </span>
+    ))}
   </div>
 }
 
@@ -446,23 +454,25 @@ function Focus({ s, dispatch, undo }: P & { undo: () => void }) {
   const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
   const heroSub = hasDirect
     ? '下面这些在等你定；顶上蓝色按钮继续当前这一步'
-    : '先建一条任务，或点下面看一遍'
+    : '先点顶上蓝色「新建一条任务」；想先看流程，点下面链接'
   return <div className="focus" data-testid="board">
     <div className="board-hero" data-testid="board-hero">
       <h2>今天要你动手的事</h2>
       <p className="hero-sub">{heroSub}</p>
       {!hasDirect && (
         <button className="link hero-demo" data-testid="hero-demo" onClick={() => {
-          if (!s.demo) { localStorage.removeItem('advance-flow-v6'); dispatch({ type: 'reset' }) }
+          if (!s.demo) { localStorage.removeItem(KEY); dispatch({ type: 'reset' }) }
           setTimeout(() => dispatch({ type: 'demo', on: !s.demo }), 50)
         }}>{s.demo ? '停止演示' : '看一遍怎么用'}</button>
       )}
       <span className="weak hero-meta">{s.role} · {TODAY}</span>
     </div>
-    {rows.length === 0 && <div className="empty" data-testid="board-empty">今天清空了 🎉<div className="empty-hint">点顶上蓝色按钮继续，或右下角 ✦ 跟灵基说</div></div>}
+    {rows.length === 0 && <div className="empty" data-testid="board-empty">{hasDirect
+      ? <>今天清空了 🎉<div className="empty-hint">点顶上蓝色按钮继续，或右下角 ✦ 跟灵基说</div></>
+      : <>还没有要你定的事<div className="empty-hint">点顶上蓝色「新建一条任务」开始；想先看一遍，点上面链接</div></>}</div>}
     {rows.map(r => <div key={r.key} className={`frow ${open === r.key ? 'open' : ''}`} data-testid="frow" data-kind={r.kind} onClick={() => setOpen(r.key)}>
       <i className={`dot ${DOT[r.kind]}`} /><span className="kind">{r.kind}</span>
-      {r.task.sample && <span className="sample-tag" data-testid="sample-tag">示例</span>}
+      {r.task.sample && <span className="sample-tag" data-testid="sample-tag">示例（可忽略）</span>}
       <b>{r.task.title}</b><span className="line">{r.line}</span>
       {r.task.source && <button className="src" onClick={e => { e.stopPropagation(); dispatch({ type: 'jumpSource', line: r.task.source!.line ?? 0 }) }}>{r.task.source.label}</button>}
       <span className="acts" onClick={e => e.stopPropagation()}>{actions(r, s, dispatch, obj, setObj, objTarget, setObjTarget)}</span>
@@ -472,7 +482,7 @@ function Focus({ s, dispatch, undo }: P & { undo: () => void }) {
       </div>}
     </div>)}
     {lingeeDoing.length > 0 && <div className="lingee-doing"><h4><span className="spark">✦</span> 灵基在做</h4>{lingeeDoing.map(t => <div key={t.id} className="ld"><span>{t.title}{t.product ? ` · ${t.product}` : ''}</span>
-      {t.kind === 'minutes' && <button className="ghost sm" data-testid="lingee-submit" onClick={() => dispatch({ type: 'lingeeSubmit', id: t.id })}>（模拟）写完</button>}</div>)}</div>}
+      {t.kind === 'minutes' && <button className="ghost sm" data-testid="lingee-submit" onClick={() => dispatch({ type: 'lingeeSubmit', id: t.id })}>生成纪要稿</button>}</div>)}</div>}
     <p className="hint"><button className="link" onClick={undo}>撤销上一步</button></p>
   </div>
 }
