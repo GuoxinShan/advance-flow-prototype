@@ -245,3 +245,28 @@ blockquote{margin:6px 0 0;padding:4px 8px;border-left:2px solid var(--lingee);ba
 .rail-input{margin-top:8px;height:40px}
 
 .board-main{position:relative}
+
+/* ===== simplify: board + one CTA ===== */
+.app.simple .top{gap:10px}
+.app.simple .brand .sub{display:none}
+.app.simple .cmd-trigger{display:none}
+.flow-dots{display:flex;align-items:center;gap:6px;padding:4px 8px}
+.flow-dots i{width:8px;height:8px;border-radius:50%;background:var(--line);display:inline-block}
+.flow-dots i.past{background:#8fd4b0}
+.flow-dots i.cur{background:var(--p);box-shadow:0 0 0 3px rgba(73,93,255,.2);transform:scale(1.15)}
+.next-cta{height:36px!important;padding:0 18px!important;font-size:14px!important;font-weight:600}
+.top-right{margin-left:auto;display:flex;align-items:center;gap:6px}
+.menu-wrap{position:relative}
+.menu{position:absolute;right:0;top:calc(100% + 6px);min-width:160px;padding:6px;border-radius:12px;border:1px solid var(--line);background:var(--glass2);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:2px;z-index:40}
+.menu button{display:flex;align-items:center;gap:6px;border:0;background:transparent;padding:8px 10px;border-radius:8px;text-align:left;font-size:13px;color:var(--fg2)}
+.menu button:hover,.menu button.on{background:#eef0ff;color:var(--p)}
+.menu button small{color:var(--weak);margin-left:auto}
+.role-btn{display:inline-flex!important;align-items:center;gap:4px}
+.help{margin:0 0 12px;font-size:14px;color:var(--mut);line-height:1.5;max-width:36em}
+.ov-foot{display:flex;justify-content:center;padding:16px 8px 4px;border-top:1px solid var(--line2);margin-top:12px}
+.ov-foot .primary.big{margin-top:0;min-width:220px;height:48px;font-size:16px}
+.lingee-fab{width:52px;height:52px;padding:0;justify-content:center;font-size:20px;border-radius:50%}
+.app.simple .entry-cards,.app.simple .brief,.app.simple code.api,.app.simple .flow-stepper,.app.simple .model-chip{display:none!important}
+.app.simple .chain{display:block}
+.empty-hint{margin-top:8px;font-size:13px;color:var(--weak)}
+.app.simple .lr-hint{display:none}

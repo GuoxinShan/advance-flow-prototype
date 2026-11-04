@@ -113,9 +113,9 @@ export const initial = (): S => ({
   drafts: [], minutesOn: false, tasks: seedTasks(), events: seedEvents(), log: [], demo: false,
   entry: null, chat: [], cmdOpen: false,
   lingee: {
-    open: true, phase: 'ready',
-    stream: '大部分工作在「要我定的」看板完成。直接建 / 闲聊 / 讨论拆 都在看板上弹层操作，不必跳页。',
-    pills: ['直接建任务', '闲聊落成', '会后从速记拆'], quote: undefined, note: '看板主场',
+    open: false, phase: 'ready',
+    stream: '点「下一步」跟着走就行。需要时再点右下角灵基气泡。',
+    pills: ['直接建任务', '帮我记下几件事', '开一场讨论采证'], quote: undefined, note: '待命',
   },
   pendingSlot: null,
   evidence: emptyEvidence(),
@@ -279,7 +279,7 @@ export function reduce(prev: S, a: A): S {
       s.overlay = a.overlay
       if (a.overlay === 'create') {
         s.entry = 'direct'; s.step = Math.max(s.step, 1); bumpFlow(s, 1)
-        setLingee(s, { open: true, phase: 'ready', stream: '直接建：在看板上填标题与原话，创建后立刻回看板。', note: '入口① 直接建', pills: ['创建到推进'], quote: undefined })
+        setLingee(s, { phase: 'ready', stream: '填标题，点大按钮就进看板。', note: '新建', pills: ['创建到推进'], quote: undefined })
       }
       if (a.overlay === 'chat') { s.entry = 'chat'; s.lingee.open = true; bumpFlow(s, 2) }
       break
@@ -318,7 +318,7 @@ export function reduce(prev: S, a: A): S {
       log(s, 'POST /items {entry:direct}', '现有', `直接建任务「${title}」`)
       s.createForm = { title: '', assignee: '阿炜', due: '2026-11-07', quote: '' }
       s.overlay = null; s.view = 'focus'; s.step = 4; bumpFlow(s, 1); s.toast = '已直接建到推进 · 留在看板'
-      setLingee(s, { open: true, phase: 'ready', stream: `「${title}」已进推进看板。继续在看板上闲聊或开讨论拆，不必跳页。`, note: '入口① 完成', pills: ['闲聊落成', '会后从速记拆'], quote: quote || undefined })
+      setLingee(s, { phase: 'ready', stream: `「${title}」已进看板。点「下一步」继续，或点右下角灵基。`, note: '已新建', pills: ['闲聊落成', '会后从速记拆'], quote: quote || undefined })
       break
     }
     case 'addNote': {
@@ -403,8 +403,8 @@ export function reduce(prev: S, a: A): S {
       s.step = 3
       bumpFlow(s, 2)
       setLingee(s, {
-        open: true, phase: 'ready', stream: '闲聊落成：在看板浮层里逐条留/丢后派出。派出后仍回看板。',
-        note: '入口② 闲聊落成', pills: [], quote: '来自闲聊',
+        phase: 'ready', stream: '勾选要的，点大按钮派出。',
+        note: '闲聊落成', pills: [], quote: '来自闲聊',
       })
       log(s, 'POST /drafts {from:chat} → board overlay', '新增', '闲聊落成 · 看板浮层确认')
       break
@@ -512,8 +512,8 @@ export function reduce(prev: S, a: A): S {
       log(s, 'calendar.writeback', '新增', '截止日与下次讨论写回日历')
       s.drafts = []; s.overlay = null; s.view = 'focus'; s.step = 4; bumpFlow(s, 3); s.toast = '已落进推进 · 留在看板'
       setLingee(s, {
-        open: true, phase: 'ready',
-        stream: '已落进推进看板。目的/共识是任务集字段。切角色继续在看板上确认/验收。',
+        phase: 'ready',
+        stream: '已派出。切角色继续确认/验收。',
         note: '已派发', pills: ['切到阿炜', '闲聊落成'], quote: undefined,
       })
       break

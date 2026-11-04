@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState, useCallback } from 'react'
 import { A, ADV_ID, FLOW_STEPS, FlowStep, initial, Overlay, reduce, ROLES, S, STATE_CN, Task, TODAY, TRANSCRIPT, WEEK, focusRows, FocusRow, Who, TState, STENO_ID } from './store'
 
-const KEY = 'advance-flow-v4'
+const KEY = 'advance-flow-v5'
 type H = { cur: S; past: S[] }
 function hreduce(h: H, a: A | { type: 'undo' }): H {
   if (a.type === 'undo') return h.past.length ? { cur: { ...h.past[0], toast: '已撤销' }, past: h.past.slice(1) } : h
@@ -11,21 +11,8 @@ function hreduce(h: H, a: A | { type: 'undo' }): H {
 }
 const load = (): H => { try { const v = localStorage.getItem(KEY); if (v) return { cur: { ...JSON.parse(v), demo: false, overlay: null }, past: [] } } catch {} return { cur: initial(), past: [] } }
 
-export const STEPS: { n: number; name: string; apis: [string, '现有' | '新增'][] }[] = [
-  { n: 1, name: '三条入口 · 推进 SoR', apis: [['POST /items {direct}', '现有'], ['POST /lingee/chat → 落成', '新增'], ['steno → 拆任务', '现有']] },
-  { n: 2, name: '可选证据场景 · 速记只采证', apis: [['steno.start', '现有'], ['steno.note / highlight', '现有'], ['跨次未完成带入', '新增']] },
-  { n: 3, name: '拆任务 / 落成 · 原话锚点', apis: [['POST /drafts', '新增'], ['dispatch-batch', '现有'], ['目的/共识字段', '新增']] },
-  { n: 4, name: '要我定的 · 聚焦', apis: [['GET /focus?role=', '现有'], ['PATCH /items/:id', '现有'], ['undo', '现有']] },
-  { n: 5, name: '推进 · 执行', apis: [['PATCH /items/:id/state', '现有'], ['行动闭环回写产物', '新增']] },
-  { n: 6, name: '纪要产物 · 确认/反对', apis: [['POST /minutes/:id/confirm', '新增'], ['反对标哪一条 → 修改子卡', '新增']] },
-  { n: 7, name: '收口 · 验收', apis: [['POST /items/:id/accept', '现有'], ['POST /items/:id/return', '现有']] },
-  { n: 8, name: '回流 · 日历/原话/云之家', apis: [['calendar.writeback', '新增'], ['source → steno#line', '新增'], ['GET /yzj/advance 只读', '现有']] },
-]
-
-const ENTRY_CN: Record<string, string> = { direct: '直接建', chat: '闲聊落成', steno: '速记拆任务' }
 const avOf = (w: Who) => ROLES.find(r => r.name === w)?.av ?? 'violet'
 const Av = ({ who, s = '' }: { who: Who; s?: string }) => <span className={`av ${s}`} data-av={who === '灵基' ? 'lingee' : avOf(who)}>{who === '灵基' ? '✦' : who ? who.slice(-1) : '?'}</span>
-const Tag = ({ api, st }: { api: string; st: '现有' | '新增' }) => <code className={`api ${st === '新增' ? 'new' : 'old'}`}>{api}<i>{st}</i></code>
 
 function Typewriter({ text, active }: { text: string; active?: boolean }) {
   const [n, setN] = useState(active ? 0 : text.length)
@@ -38,10 +25,55 @@ function Typewriter({ text, active }: { text: string; active?: boolean }) {
   return <span className="tw">{text.slice(0, n)}{active && n < text.length && <i className="caret" />}</span>
 }
 
+/** 看板顶栏唯一主按钮：按状态推进链路 */
+export function nextStep(s: S): { id: string; label: string; run: (dispatch: (a: A) => void) => void } {
+  if (s.overlay === 'create') return { id: 'create', label: '创建到推进', run: d => d({ type: 'createDirect' }) }
+  if (s.overlay === 'room' && s.recording) return { id: 'end', label: '结束并拆任务', run: d => d({ type: 'end' }) }
+  if (s.overlay === 'end') return { id: 'dispatch', label: `派出 ${s.drafts.filter(x => x.keep).length || ''} 件`.trim(), run: d => d({ type: 'dispatch' }) }
+
+  const rows = focusRows(s, s.role)
+  const first = (k: FocusRow['kind']) => rows.find(r => r.kind === k)
+
+  // 派出之后：确认 / 验收 / 接下 优先
+  const take = first('派给我')
+  if (take && (take.task.kind === 'revise' || take.task.source?.type)) {
+    if (take.task.kind === 'revise') return { id: 'revised', label: '改好了，重新发确认', run: d => d({ type: 'revised', id: take.task.id }) }
+    if (take.task.parentId) return { id: 'take', label: `接下「${take.task.title.slice(0, 10)}」`, run: d => { d({ type: 'setState', id: take.task.id, state: 'in_progress' }); d({ type: 'toast', text: `已接下「${take.task.title}」` }) } }
+  }
+  const draft = first('灵基交稿')
+  if (draft) return { id: 'sendConfirm', label: '发给确认人', run: d => d({ type: 'sendConfirm', id: draft.task.id }) }
+  const conf = first('待确认')
+  if (conf) return { id: 'confirm', label: '确认无误', run: d => d({ type: 'confirm', id: conf.task.id }) }
+  const accept = first('待验收')
+  if (accept) return { id: 'accept', label: '验收通过', run: d => d({ type: 'accept', id: accept.task.id }) }
+  const due = first('到期')
+  if (due) return { id: 'due', label: '提交验收', run: d => d({ type: 'setState', id: due.task.id, state: 'in_review' }) }
+  const lingeeDoing = s.tasks.find(t => t.assignee === '灵基' && t.kind === 'minutes' && t.state === 'in_progress')
+  if (lingeeDoing) return { id: 'lingeeSubmit', label: '（模拟）灵基写完', run: d => d({ type: 'lingeeSubmit', id: lingeeDoing.id }) }
+
+  // 三条入口按链路发现，不并排三张卡
+  const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
+  const hasStenoSet = s.tasks.some(t => t.kind === 'set' && t.source?.type === 'steno')
+  const hasChatSet = s.tasks.some(t => t.kind === 'set' && t.source?.type === 'chat')
+  if (!hasDirect) return { id: 'open-create', label: '下一步：新建任务', run: d => d({ type: 'overlay', overlay: 'create' }) }
+  if (!hasChatSet) return { id: 'open-chat', label: '下一步：跟灵基说几句', run: d => { if (!s.lingee.open) d({ type: 'lingeeToggle' }); d({ type: 'cmd', open: true }) } }
+  if (!hasStenoSet) return { id: 'open-room', label: '下一步：开讨论拆任务', run: d => d({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID }) }
+
+  if (take) return { id: 'take', label: `接下「${take.task.title.slice(0, 10)}」`, run: d => { d({ type: 'setState', id: take.task.id, state: 'in_progress' }); d({ type: 'toast', text: `已接下「${take.task.title}」` }) } }
+  const empty = first('没人接')
+  if (empty) return { id: 'assign', label: '指派给阿炜', run: d => d({ type: 'assign', id: empty.task.id, who: '阿炜' }) }
+  const ack = first('灵基回话')
+  if (ack) return { id: 'ack', label: '先排除', run: d => d({ type: 'ack', id: ack.task.id }) }
+  return { id: 'open-create2', label: '下一步：再建一个', run: d => d({ type: 'overlay', overlay: 'create' }) }
+}
+
 export default function App() {
   const [h, d] = useReducer(hreduce, undefined, load)
   const s = h.cur
   const dispatch = useCallback((a: A) => d(a), [])
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [roleOpen, setRoleOpen] = useState(false)
+  const [chainOpen, setChainOpen] = useState(false)
   useEffect(() => { localStorage.setItem(KEY, JSON.stringify(s)) }, [s])
   useEffect(() => { if (s.toast) { const t = setTimeout(() => d({ type: 'toast' }), 3500); return () => clearTimeout(t) } }, [s.toast])
   useEffect(() => { if (s.overlay === 'room' && s.recording && s.lines < TRANSCRIPT.length) { const t = setTimeout(() => d({ type: 'line' }), s.demo ? 400 : 900); return () => clearTimeout(t) } }, [s.overlay, s.recording, s.lines, s.demo])
@@ -51,6 +83,7 @@ export default function App() {
       if (e.key === 'Escape') {
         if (s.cmdOpen) dispatch({ type: 'cmd', open: false })
         else if (s.overlay) dispatch({ type: 'closeOverlay' })
+        else { setMoreOpen(false); setRoleOpen(false); setChainOpen(false) }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -58,6 +91,7 @@ export default function App() {
   }, [s.cmdOpen, s.overlay, dispatch])
   useDemo(s, dispatch)
 
+  const step = nextStep(s)
   const archives = [
     ['focus', '要我定的'] as const,
     ['calendar', '日历'] as const,
@@ -67,28 +101,35 @@ export default function App() {
   ]
 
   return (
-    <div className="app" data-entry={s.entry ?? 'none'} data-overlay={s.overlay ?? 'none'}>
+    <div className="app simple" data-entry={s.entry ?? 'none'} data-overlay={s.overlay ?? 'none'}>
       <div className="bg-glow" aria-hidden />
       <header className="top glass">
         <div className="brand">
           <b>推进</b>
-          <span className="ai-badge"><i className="spark">✦</i> 灵基陪跑</span>
-          <span className="sub">看板主场 · 其它页签只归档</span>
+          <span className="ai-badge"><i className="spark">✦</i> 灵基</span>
         </div>
-        <FlowStepper flowStep={s.flowStep} />
-        <nav data-testid="archive-nav">
-          {archives.map(([v, n]) =>
-            <button key={v} className={s.view === v ? 'on' : ''} data-testid={v === 'focus' ? 'nav-focus' : `nav-${v}`}
-              onClick={() => dispatch({ type: 'view', view: v })}>{n}</button>)}
-        </nav>
-        <button className="cmd-trigger" data-testid="cmdk" onClick={() => dispatch({ type: 'cmd', open: true })}>
-          <span className="spark">✦</span> 跟灵基说 <kbd>⌘K</kbd>
-        </button>
-        <div className="roles">{ROLES.map(r => <button key={r.name} data-testid={`role-${r.name}`} className={s.role === r.name ? 'on' : ''} onClick={() => dispatch({ type: 'role', role: r.name })}><Av who={r.name} s="s20" />{r.name}<small>{r.tag}</small></button>)}</div>
-        <div className="ctl">
-          <button className="ghost" onClick={() => d({ type: 'undo' })} disabled={!h.past.length}>撤销</button>
-          <button className="ghost" onClick={() => { localStorage.removeItem(KEY); dispatch({ type: 'reset' }) }}>一键重置</button>
-          <button className="primary glow" data-testid="demo" onClick={() => { if (!s.demo) { localStorage.removeItem(KEY); dispatch({ type: 'reset' }) } setTimeout(() => dispatch({ type: 'demo', on: !s.demo }), 50) }}>{s.demo ? '停止演示' : '▶ 自动演示'}</button>
+        <FlowDots flowStep={s.flowStep} />
+        <button className="primary glow next-cta" data-testid="next-step" onClick={() => step.run(dispatch)}>{step.label || '下一步'}</button>
+        <div className="top-right">
+          <div className="menu-wrap">
+            <button className="ghost sm" data-testid="more-btn" onClick={() => { setMoreOpen(v => !v); setRoleOpen(false) }}>更多</button>
+            {moreOpen && <div className="menu glass" data-testid="more-menu">
+              {archives.filter(([v]) => v !== 'focus').map(([v, n]) =>
+                <button key={v} data-testid={`nav-${v}`} onClick={() => { dispatch({ type: 'view', view: v }); setMoreOpen(false) }}>{n}</button>)}
+              <button data-testid="chain-toggle" onClick={() => { setChainOpen(v => !v); setMoreOpen(false) }}>{chainOpen ? '收起链路' : '看链路细节'}</button>
+              <button onClick={() => { d({ type: 'undo' }); setMoreOpen(false) }} disabled={!h.past.length}>撤销</button>
+              <button onClick={() => { localStorage.removeItem(KEY); dispatch({ type: 'reset' }); setMoreOpen(false) }}>一键重置</button>
+            </div>}
+          </div>
+          <div className="menu-wrap">
+            <button className="ghost sm role-btn" data-testid="role-menu" onClick={() => { setRoleOpen(v => !v); setMoreOpen(false) }}>
+              <Av who={s.role} s="s20" />{s.role}
+            </button>
+            {roleOpen && <div className="menu glass" data-testid="role-menu-panel">
+              {ROLES.map(r => <button key={r.name} data-testid={`role-${r.name}`} className={s.role === r.name ? 'on' : ''} onClick={() => { dispatch({ type: 'role', role: r.name }); setRoleOpen(false) }}><Av who={r.name} s="s20" />{r.name}<small>{r.tag}</small></button>)}
+            </div>}
+          </div>
+          <button className="ghost sm" data-testid="demo" onClick={() => { if (!s.demo) { localStorage.removeItem(KEY); dispatch({ type: 'reset' }) } setTimeout(() => dispatch({ type: 'demo', on: !s.demo }), 50) }}>{s.demo ? '停止' : '看一遍怎么用'}</button>
         </div>
       </header>
 
@@ -97,7 +138,6 @@ export default function App() {
           {s.view !== 'focus' && (
             <div className="back-bar" data-testid="back-bar">
               <button className="primary sm" data-testid="back-board" onClick={() => dispatch({ type: 'view', view: 'focus' })}>← 回到看板</button>
-              <span className="weak">本页只看归档 / 细节；动作请回「要我定的」</span>
             </div>
           )}
           {s.view === 'focus' && <Focus s={s} dispatch={dispatch} undo={() => d({ type: 'undo' })} />}
@@ -106,17 +146,22 @@ export default function App() {
           {s.view === 'tasks' && <AllTasks s={s} dispatch={dispatch} />}
           {s.view === 'yzj' && <Yzj s={s} />}
         </main>
-        {(s.lingee.open || s.overlay === 'chat') && <LingeeRail s={s} dispatch={dispatch} />}
-        {!s.lingee.open && s.overlay !== 'chat' && (
+        {s.lingee.open && <LingeeRail s={s} dispatch={dispatch} />}
+        {!s.lingee.open && (
           <button className="lingee-fab" data-testid="lingee-open" onClick={() => dispatch({ type: 'lingeeToggle' })}>
-            <span className="spark">✦</span> 灵基
+            <span className="spark">✦</span>
           </button>
         )}
-        <Chain s={s} />
+        {chainOpen && <Chain s={s} onClose={() => setChainOpen(false)} />}
       </div>
 
       {s.overlay && s.overlay !== 'chat' && (
-        <OverlayShell title={overlayTitle(s.overlay)} onClose={() => dispatch({ type: 'closeOverlay' })} wide={s.overlay === 'room' || s.overlay === 'end'}>
+        <OverlayShell title={overlayTitle(s.overlay)} onClose={() => dispatch({ type: 'closeOverlay' })} wide={s.overlay === 'room' || s.overlay === 'end'} primary={
+          s.overlay === 'create' ? { label: '创建到推进', testid: 'create-submit', onClick: () => dispatch({ type: 'createDirect' }) }
+            : s.overlay === 'room' && s.recording ? { label: '结束并拆任务', testid: 'end', onClick: () => dispatch({ type: 'end' }) }
+              : s.overlay === 'end' ? { label: `派出 ${s.drafts.filter(x => x.keep).length} 件`, testid: 'dispatch', onClick: () => dispatch({ type: 'dispatch' }) }
+                : undefined
+        }>
           {s.overlay === 'create' && <CreateDirect s={s} dispatch={dispatch} />}
           {s.overlay === 'room' && <Room s={s} dispatch={dispatch} />}
           {s.overlay === 'end' && <End s={s} dispatch={dispatch} />}
@@ -130,35 +175,28 @@ export default function App() {
 }
 
 function overlayTitle(o: Exclude<Overlay, null | 'chat'>) {
-  if (o === 'create') return '① 直接建任务 · 看板浮层'
-  if (o === 'room') return '③ 证据场景 · 看板浮层'
-  return '拆任务确认 · 看板浮层'
+  if (o === 'create') return '新建任务'
+  if (o === 'room') return '讨论采证'
+  return '确认要派的任务'
 }
 
-function FlowStepper({ flowStep }: { flowStep: FlowStep }) {
-  return <div className="flow-stepper" data-testid="flow-stepper" aria-label="本链路进度">
-    <span className="flow-label">本链路进度</span>
-    <ol>
-      {FLOW_STEPS.map((st, i) => (
-        <li key={st.n} className={st.n === flowStep ? 'cur' : st.n < flowStep ? 'past' : ''}>
-          <b>{st.n}</b><span>{st.name}</span>
-          {i < FLOW_STEPS.length - 1 && <i className="flow-sep" />}
-        </li>
-      ))}
-    </ol>
+function FlowDots({ flowStep }: { flowStep: FlowStep }) {
+  return <div className="flow-dots" data-testid="flow-stepper" aria-label="进度">
+    {FLOW_STEPS.map(st => <i key={st.n} className={st.n === flowStep ? 'cur' : st.n < flowStep ? 'past' : ''} title={st.name} />)}
   </div>
 }
 
 type P = { s: S; dispatch: (a: A) => void }
 
-function OverlayShell({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+function OverlayShell({ title, onClose, children, wide, primary }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; primary?: { label: string; testid: string; onClick: () => void } }) {
   return <div className="ov-mask" data-testid="overlay" onClick={onClose}>
     <div className={`ov-panel glass ${wide ? 'wide' : ''}`} onClick={e => e.stopPropagation()}>
       <div className="ov-head">
         <h3>{title}</h3>
-        <button className="ghost sm" data-testid="overlay-close" onClick={onClose}>关闭 · 回看板</button>
+        <button className="ghost sm" data-testid="overlay-close" onClick={onClose}>关闭</button>
       </div>
       <div className="ov-body">{children}</div>
+      {primary && <div className="ov-foot"><button className="primary big glow" data-testid={primary.testid} onClick={primary.onClick}>{primary.label}</button></div>}
     </div>
   </div>
 }
@@ -171,13 +209,13 @@ function LingeeRail({ s, dispatch }: P) {
   return <aside className="lingee-rail glass-panel" data-testid="lingee-rail">
     <div className="lr-head">
       <span className="av" data-av="lingee">✦</span>
-      <div><b>灵基 · 看板内对话</b><small>{L.note ?? '待命'}</small></div>
+      <div><b>灵基</b><small>{L.note ?? '待命'}</small></div>
       <button className="icon" data-testid="lingee-close" onClick={() => dispatch({ type: 'lingeeToggle' })} title="收起">✕</button>
     </div>
     <div className={`lr-status ${L.phase}`}>
-      {L.phase === 'thinking' && <><i className="spin" />思考中…</>}
-      {L.phase === 'streaming' && <><i className="spin" />流式输出</>}
-      {L.phase === 'ready' && <><i className="pulse-dot" />就绪</>}
+      {L.phase === 'thinking' && <><i className="spin" />想一下…</>}
+      {L.phase === 'streaming' && <><i className="spin" />写着…</>}
+      {L.phase === 'ready' && <><i className="pulse-dot" />在</>}
       {L.phase === 'idle' && <>空闲</>}
     </div>
     <div className="lr-stream">
@@ -198,8 +236,7 @@ function LingeeRail({ s, dispatch }: P) {
     }}>{p}</button>)}</div>
 
     <div className="lr-chat" data-testid="rail-chat">
-      <div className="lr-chat-label">闲聊记录 · 不离开看板</div>
-      {s.chat.length === 0 && <div className="lr-chat-empty">⌘K 或下方输入；结果落回看板浮层</div>}
+      {s.chat.length === 0 && <div className="lr-chat-empty">跟我说一句，我帮你落成任务</div>}
       {s.chat.map(m => <div key={m.id} className={`bubble ${m.role}`}>
         {m.role === 'lingee' && <span className="av" data-av="lingee">✦</span>}
         <div>
@@ -212,21 +249,27 @@ function LingeeRail({ s, dispatch }: P) {
     </div>
     <form className="chat-input glass rail-input" onSubmit={e => { e.preventDefault(); if (!q.trim()) return; dispatch({ type: 'chatSend', text: q.trim() }); setQ('') }}>
       <span className="spark">✦</span>
-      <input data-testid="chat-input" value={q} onChange={e => setQ(e.target.value)} placeholder="跟灵基说… 落回看板" />
+      <input data-testid="chat-input" value={q} onChange={e => setQ(e.target.value)} placeholder="跟灵基说…" />
       <button className="primary sm" type="submit">发送</button>
     </form>
-    <div className="lr-hint">动作在看板浮层完成。日历 / 速记 / 全部任务 / 云之家只是归档。</div>
   </aside>
 }
 
-function Chain({ s }: { s: S }) {
+function Chain({ s, onClose }: { s: S; onClose: () => void }) {
+  const STEPS = [
+    { n: 1, name: '直接建' },
+    { n: 2, name: '闲聊落成' },
+    { n: 3, name: '速记拆' },
+    { n: 4, name: '要我定的' },
+    { n: 5, name: '推进执行' },
+    { n: 6, name: '确认纪要' },
+    { n: 7, name: '验收' },
+    { n: 8, name: '回流归档' },
+  ]
   return <aside className="chain glass-panel" data-testid="chain">
-    <h3>链路 <small>第 {s.step} 步{s.entry ? ` · ${ENTRY_CN[s.entry]}` : ''}</small></h3>
-    <div className="model-chip">推进 SoR · 看板主场 · 无会议分型</div>
+    <div className="lr-head"><h3 style={{ margin: 0 }}>链路</h3><button className="icon" onClick={onClose}>✕</button></div>
     <ol>{STEPS.map(st => <li key={st.n} className={st.n === s.step ? 'cur' : st.n < s.step ? 'past' : ''}>
-      <b>{st.n}</b><div><div className="nm">{st.name}</div>{st.n === s.step && <div className="apis">{st.apis.map(([a, k]) => <Tag key={a} api={a} st={k} />)}</div>}</div></li>)}</ol>
-    <h4>调用记录</h4>
-    <ul className="log">{s.log.length ? s.log.map((l, i) => <li key={i}><Tag api={l.api} st={l.status} /><span>{l.note}</span></li>) : <li className="weak">还没有调用</li>}</ul>
+      <b>{st.n}</b><div className="nm">{st.name}</div></li>)}</ol>
   </aside>
 }
 
@@ -236,16 +279,15 @@ function CmdPalette({ s, dispatch, onClose }: P & { onClose: () => void }) {
   useEffect(() => { ref.current?.focus() }, [])
   const go = (text: string) => { dispatch({ type: 'chatSend', text }); onClose() }
   const suggestions = [
-    { t: '帮我记下：巡检表精简、拍照必填、看板加整改率', d: '入口② 闲聊落成 · 落回看板' },
-    { t: '帮我开一场门店巡检讨论', d: '入口③ 证据场景浮层' },
-    { t: '约个会', d: '日历时段 + 可选采证' },
-    { t: '直接建任务', d: '入口① 看板浮层' },
+    { t: '帮我记下：巡检表精简、拍照必填、看板加整改率', d: '闲聊落成任务' },
+    { t: '帮我开一场门店巡检讨论', d: '开讨论采证' },
+    { t: '直接建任务', d: '马上建一条' },
   ]
   return <div className="cmd-mask" data-testid="cmd-palette" onClick={onClose}>
     <div className="cmd-box glass" onClick={e => e.stopPropagation()}>
       <div className="cmd-row">
         <span className="spark">✦</span>
-        <input ref={ref} data-testid="cmd-input" placeholder="跟灵基说… 结果落回看板，不跳页" value={q}
+        <input ref={ref} data-testid="cmd-input" placeholder="跟灵基说…" value={q}
           onChange={e => setQ(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && q.trim()) go(q.trim()); if (e.key === 'Escape') onClose() }} />
         <kbd>↵</kbd>
@@ -253,7 +295,7 @@ function CmdPalette({ s, dispatch, onClose }: P & { onClose: () => void }) {
       <div className="cmd-sugs">
         {suggestions.map(x => <button key={x.t} data-testid="cmd-sug" onClick={() => x.t === '直接建任务' ? (dispatch({ type: 'overlay', overlay: 'create' }), onClose()) : go(x.t)}><b>{x.t}</b><small>{x.d}</small></button>)}
       </div>
-      {s.chat.length > 0 && <div className="cmd-recent">最近闲聊 {s.chat.filter(m => m.role === 'user').slice(-2).map(m => m.text).join(' · ')}</div>}
+      {s.chat.length > 0 && <div className="cmd-recent">最近 · {s.chat.filter(m => m.role === 'user').slice(-2).map(m => m.text).join(' · ')}</div>}
     </div>
   </div>
 }
@@ -261,18 +303,13 @@ function CmdPalette({ s, dispatch, onClose }: P & { onClose: () => void }) {
 function CreateDirect({ s, dispatch }: P) {
   const f = s.createForm
   return <div className="create" data-testid="create-view">
-    <p className="weak">跳过会议 · 可选原话锚点 · 创建后留在看板</p>
+    <p className="help">写标题，点下面大按钮就进看板。</p>
     <div className="create-form glass">
       <label>标题<input data-testid="create-title" value={f.title} onChange={e => dispatch({ type: 'createForm', patch: { title: e.target.value } })} placeholder="例如：巡检表字段精简到 12 项" /></label>
-      <label>原话锚点（可选）<input data-testid="create-quote" value={f.quote} onChange={e => dispatch({ type: 'createForm', patch: { quote: e.target.value } })} placeholder="谁说了什么，方便溯源" /></label>
+      <label>谁说的（可选）<input data-testid="create-quote" value={f.quote} onChange={e => dispatch({ type: 'createForm', patch: { quote: e.target.value } })} placeholder="方便以后回看" /></label>
       <div className="create-row">
         <label>负责人<select value={f.assignee} onChange={e => dispatch({ type: 'createForm', patch: { assignee: e.target.value as Who } })}>{['灵基', ...ROLES.map(r => r.name)].map(n => <option key={n}>{n}</option>)}</select></label>
         <label>截止<input type="date" value={f.due} onChange={e => dispatch({ type: 'createForm', patch: { due: e.target.value } })} /></label>
-      </div>
-      <div className="foot">
-        <button className="primary glow" data-testid="create-submit" onClick={() => dispatch({ type: 'createDirect' })}>创建到推进</button>
-        <button className="ghost" onClick={() => dispatch({ type: 'closeOverlay' })}>取消</button>
-        <code className="api old">POST /items {'{'}entry:direct{'}'}<i>现有</i></code>
       </div>
     </div>
   </div>
@@ -283,30 +320,26 @@ function Calendar({ s, dispatch }: P) {
   const evs: import('./store').CalEvent[] = [...s.events, ...s.tasks.filter(t => t.due && t.kind === 'task' && t.parentId && t.state !== 'done' && !s.events.some(e => e.title === `截止 · ${t.title}`)).map(t => ({ id: 'd' + t.id, day: t.due!, start: 18, end: 18.5, title: `截止 · ${t.title}`, kind: 'deadline' as const }))]
   const adv = s.tasks.find(t => t.id === ADV_ID)!
   return <div className="cal">
-    <div className="vhead"><h2>日历 · 归档</h2>
+    <div className="vhead"><h2>日历</h2>
       <div className="vacts">
-        <button className="ghost" data-testid="blank-discussion" onClick={() => dispatch({ type: 'startDiscussion', title: '临时讨论' })}>＋ 开证据场景</button>
-        <button className="ghost" data-testid="cal-meet" onClick={() => dispatch({ type: 'scheduleMeeting', day: '2026-11-04', start: 16, title: '临时对齐会' })}>＋ 约个会</button>
-        <button className="primary sm" data-testid="cal-direct" onClick={() => { dispatch({ type: 'view', view: 'focus' }); dispatch({ type: 'overlay', overlay: 'create' }) }}>＋ 直接建任务</button>
+        <button className="ghost" data-testid="blank-discussion" onClick={() => dispatch({ type: 'startDiscussion', title: '临时讨论' })}>＋ 开讨论</button>
+        <button className="primary sm" data-testid="cal-direct" onClick={() => { dispatch({ type: 'view', view: 'focus' }); dispatch({ type: 'overlay', overlay: 'create' }) }}>＋ 新建</button>
       </div>
     </div>
-    <p className="hint">日历是归档与入口；采证/拆任务会在看板浮层完成。</p>
     <div className="calwrap">
       <div className="grid">
         <div className="gh" />{WEEK.map(d => <div key={d} className={`gh ${d === TODAY ? 'today' : ''}`}>{'一二三四五六日'[WEEK.indexOf(d)]} <b>{d.slice(8)}</b></div>)}
         {hours.map(hh => <div key={hh} className="row"><div className="hr">{hh}:00</div>{WEEK.map(d => <div key={d} className="cell">
           {evs.filter(e => e.day === d && Math.floor(e.start) === hh).map(e => <div key={e.id} className={`ev ${e.kind}`} data-testid={e.kind === 'discussion' ? 'cal-discussion' : undefined}
             onClick={() => e.kind === 'discussion' && e.taskId && dispatch({ type: 'startDiscussion', title: e.title, source: `item:${e.taskId}`, boundTask: e.taskId })}>
-            <b>{e.title}</b>{e.taskId && <small>🔗 绑定 {e.kind === 'next' ? '任务集' : adv.title}</small>}{e.kind === 'deadline' && <small>回写自推进</small>}{e.kind === 'next' && <small>回写自推进</small>}{e.kind === 'discussion' && <small>可选证据场景</small>}</div>)}
+            <b>{e.title}</b>{e.taskId && <small>🔗 {e.kind === 'next' ? '任务集' : adv.title}</small>}{e.kind === 'deadline' && <small>截止</small>}</div>)}
         </div>)}</div>)}
       </div>
       <div className="side">
-        <h4>本周任务 · 可开证据场景</h4>
+        <h4>本周任务</h4>
         {s.tasks.filter(t => t.kind === 'task' && !t.parentId && t.state !== 'done').map(t => <div key={t.id} className="tcard">
-          <div><b>{t.title}</b><small>{t.assignee || '没人接'} · {STATE_CN[t.state]}{t.due ? ` · ${t.due.slice(5)} 截止` : ''}</small>
-            {t.purpose && <small className="purpose">目的 · {t.purpose}</small>}
-          </div>
-          <button className="link" data-testid={t.id === ADV_ID ? 'pull-discussion' : undefined} onClick={() => dispatch({ type: 'startDiscussion', title: `${t.title}对齐`, source: `item:${t.id}`, boundTask: t.id })}>开证据场景</button></div>)}
+          <div><b>{t.title}</b><small>{t.assignee || '没人接'} · {STATE_CN[t.state]}</small></div>
+          <button className="link" data-testid={t.id === ADV_ID ? 'pull-discussion' : undefined} onClick={() => dispatch({ type: 'startDiscussion', title: `${t.title}对齐`, source: `item:${t.id}`, boundTask: t.id })}>开讨论</button></div>)}
       </div>
     </div>
   </div>
@@ -315,30 +348,22 @@ function Calendar({ s, dispatch }: P) {
 function StenoArchive({ s, dispatch }: P) {
   const n = Math.max(s.lines, s.highlight != null ? s.highlight + 1 : 0, TRANSCRIPT.length)
   return <div className="room" data-testid="steno-archive">
-    <div className="vhead"><h2>速记证据 · 归档</h2>
-      <code className="api old">GET /steno/{STENO_ID}</code>
-      <span className="ai-badge">只读采证 · 管理在看板</span>
-    </div>
+    <div className="vhead"><h2>速记证据</h2></div>
     {s.highlight != null && <div className="strip done">已定位原话 L{s.highlight}</div>}
     <div className="room-grid">
       <div className="tr">{TRANSCRIPT.slice(0, n || TRANSCRIPT.length).map((l, i) => <div key={i} className={`ln ${s.highlight === i ? 'hl' : ''} ${s.evidence.highlights.some(h => h.line === i) ? 'pinned' : ''}`}>
         <Av who={l.who} s="s20" /><b>{l.who}</b><small>{l.t}</small><p>{l.text}</p>
       </div>)}</div>
       <aside className="evidence" data-testid="evidence-panel">
-        <h4>证据层</h4>
+        <h4>证据</h4>
         <section>
-          <h5>会中笔记 / 重点</h5>
+          <h5>笔记 / 重点</h5>
           <ul>{s.evidence.notes.map((x, i) => <li key={i}>{x}</li>)}
             {s.evidence.highlights.map(h => <li key={'h' + h.line} className="hl-li">L{h.line} · {h.text.slice(0, 28)}…</li>)}
-            {!s.evidence.notes.length && !s.evidence.highlights.length && <li className="weak">还没有笔记/重点</li>}
+            {!s.evidence.notes.length && !s.evidence.highlights.length && <li className="weak">还没有</li>}
           </ul>
         </section>
-        <section>
-          <h5>AI 稿素材</h5>
-          <ol>{s.evidence.aiDraft.length ? s.evidence.aiDraft.map((x, i) => <li key={i}>{x.slice(0, 36)}…</li>) : <li className="weak">无</li>}</ol>
-        </section>
-        <p className="hint">要采证请从看板开证据场景浮层。</p>
-        <button className="primary sm" onClick={() => dispatch({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID })}>在看板开证据场景</button>
+        <button className="primary sm" onClick={() => dispatch({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID })}>在看板开讨论</button>
       </aside>
     </div>
   </div>
@@ -350,76 +375,51 @@ function Room({ s, dispatch }: P) {
   useEffect(() => { ref.current?.querySelector('.hl')?.scrollIntoView({ block: 'center' }) }, [s.highlight])
   const n = s.lines
   return <div className="room" data-testid="room-view">
-    <div className="vhead"><h2>证据场景 · {s.discussion?.title ?? '门店巡检改版对齐'}</h2>
-      {s.discussion?.source && <code className="api old">{s.discussion.source}</code>}
-      {s.discussion?.fromChat && <span className="ai-badge">来自闲聊</span>}
-      <span className="ai-badge">速记 = 证据层 · 无管理门禁</span>
-    </div>
+    <p className="help">听着记重点。听完点下面「结束并拆任务」。</p>
     <div className="people">{ROLES.map(r => <span key={r.name}><Av who={r.name} />{r.name}</span>)}</div>
     {s.carryIn.length > 0 && <div className="carry" data-testid="carry-in">
-      <b>跨次带入 · 同来源未完成 {s.carryIn.length} 件</b>
-      {s.carryIn.map(t => <span key={t.id} className="carry-chip">{t.title}<i>{STATE_CN[t.state]}</i></span>)}
+      <b>上次没做完 {s.carryIn.length} 件</b>
+      {s.carryIn.map(t => <span key={t.id} className="carry-chip">{t.title}</span>)}
     </div>}
-    {s.recording ? <div className="strip"><i className="rec" />速记采证中 · 只记录 <span>meeting:u_liuyang:{STENO_ID}</span><em><span className="spark">✦</span> AI 稿 {s.evidence.aiDraft.length} · 重点 {s.evidence.highlights.length}</em></div>
-      : <div className="strip done">速记已结束 · 原文只读{s.highlight !== undefined && <em>已定位到原话 L{s.highlight}</em>}</div>}
+    {s.recording ? <div className="strip"><i className="rec" />采证中<em>重点 {s.evidence.highlights.length}</em></div>
+      : <div className="strip done">已结束</div>}
     <div className="room-grid">
       <div className="tr" ref={ref}>{TRANSCRIPT.slice(0, n).map((l, i) => <div key={i} className={`ln ${s.highlight === i ? 'hl' : ''} ${s.evidence.highlights.some(h => h.line === i) ? 'pinned' : ''}`}>
         <Av who={l.who} s="s20" /><b>{l.who}</b><small>{l.t}</small>
-        <p>{l.text}{s.recording && <button className="pin" data-testid="pin-hl" onClick={() => dispatch({ type: 'pinHighlight', line: i })} title="钉为重点">📌</button>}</p>
+        <p>{l.text}{s.recording && <button className="pin" data-testid="pin-hl" onClick={() => dispatch({ type: 'pinHighlight', line: i })} title="钉重点">📌</button>}</p>
       </div>)}
         {s.recording && n < TRANSCRIPT.length && <div className="typing"><i className="spin" /> 转写中…</div>}</div>
       <aside className="evidence" data-testid="evidence-panel">
-        <h4>证据层</h4>
+        <h4>证据</h4>
         <section>
-          <h5>会中笔记 / 重点</h5>
+          <h5>笔记 / 重点</h5>
           <ul>{s.evidence.notes.map((x, i) => <li key={i}>{x}</li>)}
             {s.evidence.highlights.map(h => <li key={'h' + h.line} className="hl-li">L{h.line} · {h.text.slice(0, 28)}…</li>)}
-            {!s.evidence.notes.length && !s.evidence.highlights.length && <li className="weak">还没有笔记/重点</li>}
+            {!s.evidence.notes.length && !s.evidence.highlights.length && <li className="weak">还没有</li>}
           </ul>
           {s.recording && <form className="note-form" onSubmit={e => { e.preventDefault(); if (!note.trim()) return; dispatch({ type: 'addNote', text: note }); setNote('') }}>
-            <input data-testid="note-input" value={note} onChange={e => setNote(e.target.value)} placeholder="随手记一条…" />
+            <input data-testid="note-input" value={note} onChange={e => setNote(e.target.value)} placeholder="随手记…" />
             <button className="ghost sm" type="submit">记</button>
           </form>}
         </section>
-        <section>
-          <h5>AI 稿素材</h5>
-          <ol>{s.evidence.aiDraft.length ? s.evidence.aiDraft.map((x, i) => <li key={i}>{x.slice(0, 36)}…</li>) : <li className="weak">听着长出来</li>}</ol>
-        </section>
-        <section>
-          <h5>人工稿素材</h5>
-          <ul>{s.evidence.humanDraft.map((x, i) => <li key={i}>{x}</li>)}
-            {!s.evidence.humanDraft.length && <li className="weak">结束时可补</li>}
-          </ul>
-        </section>
-        <p className="hint">这里没有确认 / 分派 / 催办。那些都在推进看板。</p>
       </aside>
     </div>
-    {s.recording && <button className="primary big glow" data-testid="end" onClick={() => dispatch({ type: 'end' })}>结束并拆任务</button>}
   </div>
 }
 
 function End({ s, dispatch }: P) {
   const [edit, setEdit] = useState<string | null>(null)
-  const entryLabel = s.entry === 'chat' ? '② 闲聊落成' : '③ 会后从速记拆任务'
   return <div className="end" data-testid="end-view">
-    <div className="vhead"><h2><span className="spark">✦</span> {entryLabel} · {s.drafts.filter(d => !d.minutes).length} 件</h2><code className="api new">POST /drafts<i>新增</i></code></div>
-    <p className="weak">只决定「要不要变成任务」。派出后回看板，不跳页。</p>
-    <div className="parent">任务集 · {s.discussion?.title}
-      <small>父任务 · 刘洋发起{s.discussion?.boundTask ? ` · 挂在「门店巡检改版」下` : ''}{s.entry === 'chat' ? ' · 闲聊落成' : ' · 速记拆'}</small>
-      <div className="fields">
-        <span>目的 · 把讨论结论落成可追责的任务</span>
-        <span>共识 · 表单精简 / 拍照必填 / 整改率 / 试点 3 家（字段，非会议类型）</span>
-      </div>
-    </div>
+    <p className="help">勾选要派的，点下面大按钮派出去。</p>
+    <div className="parent">{s.discussion?.title || '任务集'}</div>
     {s.drafts.map(d => <div key={d.id} className={`draft ${d.keep ? '' : 'drop'}`} data-testid="draft">
       <label className="chk"><input type="checkbox" checked={d.keep} onChange={() => dispatch({ type: 'keep', id: d.id })} />{d.keep ? '要' : '不要'}</label>
       <div className="dm">{edit === d.id ? <input autoFocus defaultValue={d.title} onBlur={e => { dispatch({ type: 'editDraft', id: d.id, title: e.target.value }); setEdit(null) }} onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
-        : <b onClick={() => setEdit(d.id)} title="点击改一句">{d.title} <span className="pen">✎</span></b>}
-        <blockquote onClick={() => d.line > 0 && dispatch({ type: 'jumpSource', line: d.line })}>原话{d.line > 0 ? ` L${d.line}` : ''}：「{d.quote}」</blockquote></div>
+        : <b onClick={() => setEdit(d.id)}>{d.title}</b>}
+        <blockquote onClick={() => d.line > 0 && dispatch({ type: 'jumpSource', line: d.line })}>「{d.quote}」</blockquote></div>
       <select value={d.assignee} onChange={e => dispatch({ type: 'draftAssignee', id: d.id, who: e.target.value as Who })}>{['灵基', ...ROLES.map(r => r.name)].map(n => <option key={n}>{n}</option>)}</select>
       <span className="due">{d.due.slice(5)}</span></div>)}
-    <label className="toggle"><input type="checkbox" data-testid="minutes-toggle" checked={s.minutesOn} onChange={() => dispatch({ type: 'toggleMinutes' })} /> 纪要作产物挂父卡，并建确认子卡（老王、阿炜）</label>
-    <div className="foot"><button className="primary glow" data-testid="dispatch" onClick={() => dispatch({ type: 'dispatch' })}>派出 {s.drafts.filter(d => d.keep).length} 件到推进</button><code className="api old">dispatch-batch<i>现有</i></code></div>
+    <label className="toggle"><input type="checkbox" data-testid="minutes-toggle" checked={s.minutesOn} onChange={() => dispatch({ type: 'toggleMinutes' })} /> 顺带整理纪要让大家确认</label>
   </div>
 }
 
@@ -432,49 +432,36 @@ function Focus({ s, dispatch, undo }: P & { undo: () => void }) {
   const [obj, setObj] = useState('')
   const [objTarget, setObjTarget] = useState(OBJ_TARGETS[1])
   const lingeeDoing = s.tasks.filter(t => t.assignee === '灵基' && t.state === 'in_progress')
-  const due = rows.filter(r => r.kind === '到期').length
   return <div className="focus" data-testid="board">
-    <div className="vhead"><h2>要我定的 · {s.role}</h2><span className="weak">{TODAY} · 主场看板 · 动作不跳页</span></div>
-    <div className="entry-cards three">
-      <button className="entry glass" data-testid="entry-direct" onClick={() => dispatch({ type: 'overlay', overlay: 'create' })}>
-        <b>① 直接建任务</b><span>看板浮层 · 立刻进推进</span>
-      </button>
-      <button className="entry glass ai" data-testid="entry-chat" onClick={() => dispatch({ type: 'cmd', open: true })}>
-        <b><span className="spark">✦</span> ② 闲聊落成任务</b><span>⌘K · 对话在右侧栏 · 落回看板</span>
-      </button>
-      <button className="entry glass" data-testid="entry-steno" onClick={() => dispatch({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID })}>
-        <b>③ 会后从速记拆任务</b><span>看板浮层采证 · 拆完回看板</span>
-      </button>
-    </div>
-    <div className="brief"><span className="spark">✦</span> <Typewriter text={`今天 ${rows.length} 件在等${s.role}${due ? `，先处理 ${due} 件今天到期的` : ''}。点入口或行内按钮即可，不用换页。`} active /></div>
-    {rows.length === 0 && <div className="empty">今天清空了 🎉 <small>灵基还在做 {lingeeDoing.length} 件</small></div>}
+    <div className="vhead"><h2>要我定的</h2><span className="weak">{s.role} · {TODAY}</span></div>
+    {rows.length === 0 && <div className="empty">今天清空了 🎉<div className="empty-hint">点顶上「下一步」，或右下角灵基气泡</div></div>}
     {rows.map(r => <div key={r.key} className={`frow ${open === r.key ? 'open' : ''}`} data-testid="frow" data-kind={r.kind} onClick={() => setOpen(r.key)}>
       <i className={`dot ${DOT[r.kind]}`} /><span className="kind">{r.kind}</span>
       <b>{r.task.title}</b><span className="line">{r.line}</span>
       {r.task.source && <button className="src" onClick={e => { e.stopPropagation(); dispatch({ type: 'jumpSource', line: r.task.source!.line ?? 0 }) }}>{r.task.source.label}</button>}
       <span className="acts" onClick={e => e.stopPropagation()}>{actions(r, s, dispatch, obj, setObj, objTarget, setObjTarget)}</span>
-      {open === r.key && r.kind === '灵基交稿' && s.minutesDoc && <div className="doc"><h5>纪要产物（AI 稿 + 人工稿）</h5><ol>{s.minutesDoc.map((m, i) => <li key={i}>{m}</li>)}</ol></div>}
-      {open === r.key && r.kind === '待确认' && s.minutesDoc && <div className="doc"><h5>纪要产物 · 反对请标哪一条</h5><ol>{s.minutesDoc.map((m, i) => <li key={i}>{m}</li>)}</ol>
+      {open === r.key && r.kind === '灵基交稿' && s.minutesDoc && <div className="doc"><h5>纪要</h5><ol>{s.minutesDoc.map((m, i) => <li key={i}>{m}</li>)}</ol></div>}
+      {open === r.key && r.kind === '待确认' && s.minutesDoc && <div className="doc"><h5>纪要 · 反对请标哪一条</h5><ol>{s.minutesDoc.map((m, i) => <li key={i}>{m}</li>)}</ol>
         <div className="obj-row"><label>反对哪一条 <select data-testid="obj-target" value={objTarget} onChange={e => setObjTarget(e.target.value)}>{OBJ_TARGETS.map(t => <option key={t}>{t}</option>)}</select></label></div>
       </div>}
     </div>)}
     {lingeeDoing.length > 0 && <div className="lingee-doing"><h4><span className="spark">✦</span> 灵基在做</h4>{lingeeDoing.map(t => <div key={t.id} className="ld"><span>{t.title}{t.product ? ` · ${t.product}` : ''}</span>
-      {t.kind === 'minutes' && <button className="ghost sm" data-testid="lingee-submit" onClick={() => dispatch({ type: 'lingeeSubmit', id: t.id })}>（模拟）灵基写完 → 提交验收</button>}</div>)}</div>}
-    <p className="hint">处理掉的行会消失；可「撤销」。<button className="link" onClick={undo}>撤销上一步</button></p>
+      {t.kind === 'minutes' && <button className="ghost sm" data-testid="lingee-submit" onClick={() => dispatch({ type: 'lingeeSubmit', id: t.id })}>（模拟）写完</button>}</div>)}</div>}
+    <p className="hint"><button className="link" onClick={undo}>撤销上一步</button></p>
   </div>
 }
 function actions(r: FocusRow, s: S, dispatch: (a: A) => void, obj: string, setObj: (v: string) => void, objTarget: string, setObjTarget: (v: string) => void) {
   const t = r.task
   switch (r.kind) {
-    case '派给我': return t.kind === 'revise' ? <button className="primary sm" data-testid="act-revised" onClick={() => dispatch({ type: 'revised', id: t.id })}>改好了 · 重新发确认</button>
+    case '派给我': return t.kind === 'revise' ? <button className="primary sm" data-testid="act-revised" onClick={() => dispatch({ type: 'revised', id: t.id })}>改好了</button>
       : <button className="primary sm" data-testid="act-take" onClick={() => { dispatch({ type: 'setState', id: t.id, state: 'in_progress' }); dispatch({ type: 'toast', text: `已接下「${t.title}」` }) }}>接下</button>
     case '到期': return <button className="primary sm" onClick={() => dispatch({ type: 'setState', id: t.id, state: 'in_review' })}>提交验收</button>
     case '没人接': return <select className="sm" defaultValue="" onChange={e => dispatch({ type: 'assign', id: t.id, who: e.target.value as Who })}><option value="" disabled>指派给…</option>{ROLES.map(x => <option key={x.name}>{x.name}</option>)}</select>
     case '灵基回话': return <button className="primary sm" onClick={() => dispatch({ type: 'ack', id: t.id })}>先排除</button>
-    case '灵基交稿': return <button className="primary sm" data-testid="act-send-confirm" onClick={() => dispatch({ type: 'sendConfirm', id: t.id })}>发给 老王、阿炜 确认</button>
+    case '灵基交稿': return <button className="primary sm" data-testid="act-send-confirm" onClick={() => dispatch({ type: 'sendConfirm', id: t.id })}>发给确认人</button>
     case '待确认': return <><button className="primary sm" data-testid="act-confirm" onClick={() => dispatch({ type: 'confirm', id: t.id })}>确认无误</button>
-      <input className="sm" placeholder="异议说明" value={obj} onChange={e => setObj(e.target.value)} data-testid="obj-input" />
-      <button className="ghost sm" data-testid="act-object" onClick={() => { dispatch({ type: 'object', id: t.id, text: obj || '拍照必填要分门店类型，便利店先不强制', target: objTarget }); setObj('') }}>反对这条</button></>
+      <input className="sm" placeholder="异议" value={obj} onChange={e => setObj(e.target.value)} data-testid="obj-input" />
+      <button className="ghost sm" data-testid="act-object" onClick={() => { dispatch({ type: 'object', id: t.id, text: obj || '拍照必填要分门店类型，便利店先不强制', target: objTarget }); setObj('') }}>反对</button></>
     case '待验收': return <><button className="primary sm" data-testid="act-accept" onClick={() => dispatch({ type: 'accept', id: t.id })}>验收</button><button className="ghost sm" onClick={() => dispatch({ type: 'return', id: t.id })}>退回</button></>
     case '没人动·催一下': return <button className="ghost sm" onClick={() => dispatch({ type: 'nudge', id: t.id })}>催一下</button>
   }
@@ -491,25 +478,17 @@ function AllTasks({ s, dispatch }: P) {
       <div className={`trow st-${t.state}`} style={{ paddingLeft: 12 + depth * 22 }} data-testid="trow">
         {kids.length ? <button className="fold" onClick={() => setFold({ ...fold, [t.id]: !isFold })}>{isFold ? '▸' : '▾'}</button> : <span className="fold" />}
         <b>{t.title}</b>{kids.length > 0 && <span className="cnt">{t.kind === 'minutes' ? '确认' : '完成'} {done}/{kids.length}</span>}
-        {t.purpose && <span className="field-chip" title={t.purpose}>目的</span>}
-        {t.consensus && <span className="field-chip" title={t.consensus.join(' · ')}>共识</span>}
-        {t.product && <span className="field-chip product" title={t.product}>产物</span>}
         <span className={`pill ${t.state}`}>{STATE_CN[t.state]}</span><Av who={t.assignee} s="s20" /><span className="weak">{t.assignee || '没人接'}</span>
         {t.due && <span className={`due ${t.due <= TODAY && t.state !== 'done' ? 'over' : ''}`}>{t.due.slice(5)}</span>}
-        {t.source && <button className="src" onClick={() => dispatch({ type: 'jumpSource', line: t.source!.line ?? 0 })}>来源 L{t.source.line ?? '—'}</button>}
+        {t.source && <button className="src" onClick={() => dispatch({ type: 'jumpSource', line: t.source!.line ?? 0 })}>来源</button>}
         <span className="acts">{stateBtns(t, s, dispatch)}</span>
       </div>
-      {!isFold && t.kind === 'set' && (t.purpose || t.consensus) && <div className="set-meta" style={{ paddingLeft: 34 + depth * 22 }}>
-        {t.purpose && <div>目的 · {t.purpose}</div>}
-        {t.consensus && <div>共识 · {t.consensus.join(' · ')}</div>}
-        {t.product && <div>产物 · {t.product}</div>}
-      </div>}
       {!isFold && kids.map(k => row(k, depth + 1))}
     </div>
   }
   const tl = [...s.events.filter(e => e.kind !== 'meeting' && e.kind !== 'deadline'), ...s.tasks.filter(t => t.due && t.state !== 'done').map(t => ({ id: t.id, day: t.due!, title: `截止 · ${t.title}`, kind: 'deadline' }))].sort((a, b) => a.day.localeCompare(b.day))
   return <div className="all">
-    <div className="vhead"><h2>全部任务 · 归档</h2><span className="weak">细节调整可在此；主动作回看板</span></div>
+    <div className="vhead"><h2>全部任务</h2></div>
     <div className="allwrap"><div className="list">{tops.map(t => row(t, 0))}</div>
       <div className="timeline"><h4>时间线</h4>{tl.map(e => <div key={e.id + e.title} className={`tl ${e.kind}`}><span>{e.day.slice(5)}</span>{e.title}</div>)}</div></div>
   </div>
@@ -518,7 +497,7 @@ function stateBtns(t: Task, s: S, dispatch: (a: A) => void) {
   const me = s.role
   if (t.state === 'done' || t.kind === 'set') return null
   if (t.state !== 'in_review' && s.tasks.some(k => k.parentId === t.id && k.state !== 'done')) return <span className="weak">等子任务</span>
-  if (t.assignee === '灵基') return t.state === 'in_progress' ? <button className="ghost sm" onClick={() => dispatch(t.kind === 'minutes' ? { type: 'lingeeSubmit', id: t.id } : { type: 'setState', id: t.id, state: 'in_review', by: '灵基' })}>灵基提交验收</button>
+  if (t.assignee === '灵基') return t.state === 'in_progress' ? <button className="ghost sm" onClick={() => dispatch(t.kind === 'minutes' ? { type: 'lingeeSubmit', id: t.id } : { type: 'setState', id: t.id, state: 'in_review', by: '灵基' })}>灵基提交</button>
     : t.state === 'in_review' && t.creator === me && t.kind !== 'minutes' ? <button className="primary sm" onClick={() => dispatch({ type: 'accept', id: t.id })}>验收</button> : null
   const go = (st: TState, label: string, id?: string) => <button className="ghost sm" data-testid={id} onClick={() => dispatch({ type: 'setState', id: t.id, state: st })}>{label}</button>
   if (t.assignee === me && t.state === 'suggested' && t.kind === 'task') return go('in_progress', '接下')
@@ -529,14 +508,10 @@ function stateBtns(t: Task, s: S, dispatch: (a: A) => void) {
 
 function Yzj({ s }: { s: S }) {
   return <div className="yzj">
-    <div className="vhead"><h2>云之家 · 推进（只读归档）</h2><code className="api old">GET /yzj/advance<i>现有</i></code></div>
+    <div className="vhead"><h2>云之家 · 只读</h2></div>
     <div className="phone"><div className="ph">推进 · {s.role}</div>
-      {s.tasks.filter(t => t.kind !== 'confirm').map(t => <div key={t.id} className="yrow"><b>{t.title}</b><small>{t.assignee || '没人接'} · {STATE_CN[t.state]}{t.due ? ` · ${t.due.slice(5)}` : ''}</small>
-        {t.purpose && <small className="weak">目的 · {t.purpose}</small>}
-        {t.product && <small className="weak">产物 · {t.product}</small>}
-        {t.source && <small className="weak">{t.source.label}{t.source.line != null ? ` · 原话 L${t.source.line}` : ''}</small>}
-      </div>)}
-      <div className="ro">只读：在云之家里只看，不改。改动请回看板。</div></div>
+      {s.tasks.filter(t => t.kind !== 'confirm').map(t => <div key={t.id} className="yrow"><b>{t.title}</b><small>{t.assignee || '没人接'} · {STATE_CN[t.state]}{t.due ? ` · ${t.due.slice(5)}` : ''}</small></div>)}
+      <div className="ro">只读。改动请回看板。</div></div>
   </div>
 }
 
@@ -548,46 +523,44 @@ function useDemo(s: S, dispatch: (a: A) => void) {
     const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
     const st = () => ref.current
     const find = (f: (t: Task) => boolean) => st().tasks.find(f)!
-    // 自动演示：全程留在看板；浮层完成三条入口 + 确认验收；步进「本链路进度」
     const steps: [string, () => void, number][] = [
-      ['① 直接建 · 浮层', () => dispatch({ type: 'overlay', overlay: 'create' }), 1000],
-      ['① 填标题与原话', () => {
+      ['新建任务', () => dispatch({ type: 'overlay', overlay: 'create' }), 900],
+      ['填标题', () => {
         dispatch({ type: 'createForm', patch: { title: '巡检表字段精简到 12 项', quote: '阿炜说周五前出新版字段', assignee: '阿炜', due: '2026-11-06' } })
-      }, 900],
-      ['① 创建回看板', () => dispatch({ type: 'createDirect' }), 1400],
-      ['② 闲聊落成 · 右侧栏', () => { dispatch({ type: 'chatSend', text: '帮我记下：拍照必填、看板加整改率' }) }, 1600],
-      ['② 落成推进任务', () => dispatch({ type: 'pill', pill: '落成推进任务' }), 1200],
-      ['② 派出闲聊草稿', () => dispatch({ type: 'dispatch' }), 1400],
-      ['③ 开证据场景浮层', () => dispatch({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID }), 3800],
-      ['③ 钉重点 + 笔记', () => { dispatch({ type: 'pinHighlight', line: 2 }); dispatch({ type: 'addNote', text: '便利店拍照先不强制（会中笔记）' }) }, 900],
-      ['③ 结束并拆任务', () => dispatch({ type: 'end' }), 1200],
-      ['③ 打开纪要产物', () => dispatch({ type: 'toggleMinutes' }), 900],
-      ['③ 派出回看板', () => dispatch({ type: 'dispatch' }), 1400],
-      ['阿炜接下', () => { dispatch({ type: 'role', role: '阿炜' }); const t = find(x => x.title.startsWith('巡检表') && x.kind === 'task' && x.state === 'suggested'); if (t) dispatch({ type: 'setState', id: t.id, state: 'in_progress' }) }, 1100],
-      ['灵基交纪要产物', () => { dispatch({ type: 'role', role: '刘洋' }); const m = find(t => t.kind === 'minutes'); if (m) dispatch({ type: 'lingeeSubmit', id: m.id }) }, 1300],
-      ['发给确认子卡', () => { const m = find(t => t.kind === 'minutes'); if (m) dispatch({ type: 'sendConfirm', id: m.id }) }, 1100],
-      ['老王反对第 2 条', () => { dispatch({ type: 'role', role: '老王' }); dispatch({ type: 'object', id: find(t => t.kind === 'confirm' && t.assignee === '老王').id, text: '拍照必填要分门店类型，便利店先不强制', target: '第 2 条 · 拍照上传改为必填' }) }, 1400],
-      ['阿炜确认', () => { dispatch({ type: 'role', role: '阿炜' }); dispatch({ type: 'confirm', id: find(t => t.kind === 'confirm' && t.assignee === '阿炜').id }) }, 1100],
-      ['刘洋改好重发', () => { dispatch({ type: 'role', role: '刘洋' }); dispatch({ type: 'revised', id: find(t => t.kind === 'revise').id }) }, 1100],
-      ['老王确认第 2 版', () => { dispatch({ type: 'role', role: '老王' }); dispatch({ type: 'confirm', id: find(t => t.kind === 'confirm' && t.assignee === '老王').id }) }, 1100],
-      ['推进执行并验收', () => {
+      }, 800],
+      ['创建', () => dispatch({ type: 'createDirect' }), 1200],
+      ['跟灵基说', () => { dispatch({ type: 'chatSend', text: '帮我记下：拍照必填、看板加整改率' }) }, 1400],
+      ['落成', () => dispatch({ type: 'pill', pill: '落成推进任务' }), 1000],
+      ['派出', () => dispatch({ type: 'dispatch' }), 1200],
+      ['开讨论', () => dispatch({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID }), 3600],
+      ['钉重点', () => { dispatch({ type: 'pinHighlight', line: 2 }); dispatch({ type: 'addNote', text: '便利店拍照先不强制' }) }, 800],
+      ['结束拆任务', () => dispatch({ type: 'end' }), 1000],
+      ['打开纪要', () => dispatch({ type: 'toggleMinutes' }), 800],
+      ['派出', () => dispatch({ type: 'dispatch' }), 1200],
+      ['阿炜接下', () => { dispatch({ type: 'role', role: '阿炜' }); const t = find(x => x.title.startsWith('巡检表') && x.kind === 'task' && x.state === 'suggested'); if (t) dispatch({ type: 'setState', id: t.id, state: 'in_progress' }) }, 1000],
+      ['灵基交纪要', () => { dispatch({ type: 'role', role: '刘洋' }); const m = find(t => t.kind === 'minutes'); if (m) dispatch({ type: 'lingeeSubmit', id: m.id }) }, 1100],
+      ['发给确认', () => { const m = find(t => t.kind === 'minutes'); if (m) dispatch({ type: 'sendConfirm', id: m.id }) }, 1000],
+      ['老王反对', () => { dispatch({ type: 'role', role: '老王' }); dispatch({ type: 'object', id: find(t => t.kind === 'confirm' && t.assignee === '老王').id, text: '拍照必填要分门店类型，便利店先不强制', target: '第 2 条 · 拍照上传改为必填' }) }, 1200],
+      ['阿炜确认', () => { dispatch({ type: 'role', role: '阿炜' }); dispatch({ type: 'confirm', id: find(t => t.kind === 'confirm' && t.assignee === '阿炜').id }) }, 1000],
+      ['刘洋改好', () => { dispatch({ type: 'role', role: '刘洋' }); dispatch({ type: 'revised', id: find(t => t.kind === 'revise').id }) }, 1000],
+      ['老王再确认', () => { dispatch({ type: 'role', role: '老王' }); dispatch({ type: 'confirm', id: find(t => t.kind === 'confirm' && t.assignee === '老王').id }) }, 1000],
+      ['推进执行', () => {
         for (const t of st().tasks.filter(t => t.kind === 'task' && t.parentId?.startsWith('set') && t.state !== 'done')) {
           if (t.state === 'suggested') dispatch({ type: 'setState', id: t.id, state: 'in_progress', by: t.assignee })
           dispatch({ type: 'setState', id: t.id, state: 'in_review', by: t.assignee })
         }
-      }, 1300],
-      ['刘洋验收', () => { dispatch({ type: 'role', role: '刘洋' }); for (const t of st().tasks.filter(t => t.kind === 'task' && t.state === 'in_review')) dispatch({ type: 'accept', id: t.id }) }, 1300],
-      ['验收任务集', () => { const set = find(t => t.kind === 'set' && t.state === 'in_review'); if (set) dispatch({ type: 'accept', id: set.id }) }, 1100],
-      ['扫一眼归档：日历', () => dispatch({ type: 'view', view: 'calendar' }), 1000],
-      ['回到看板', () => dispatch({ type: 'view', view: 'focus' }), 1200],
+      }, 1100],
+      ['验收', () => { dispatch({ type: 'role', role: '刘洋' }); for (const t of st().tasks.filter(t => t.kind === 'task' && t.state === 'in_review')) dispatch({ type: 'accept', id: t.id }) }, 1100],
+      ['验收任务集', () => { const set = find(t => t.kind === 'set' && t.state === 'in_review'); if (set) dispatch({ type: 'accept', id: set.id }) }, 1000],
+      ['回看板', () => dispatch({ type: 'view', view: 'focus' }), 1000],
     ]
     ;(async () => {
       await wait(300)
       for (const [label, fn, ms] of steps) {
         if (!alive || !ref.current.demo) return
-        fn(); dispatch({ type: 'toast', text: `自动演示 · ${label}` }); await wait(ms)
+        fn(); dispatch({ type: 'toast', text: `看一遍 · ${label}` }); await wait(ms)
       }
-      dispatch({ type: 'demo', on: false }); dispatch({ type: 'toast', text: '演示完成：全程看板浮层 · 本链路进度已走完' })
+      dispatch({ type: 'demo', on: false }); dispatch({ type: 'toast', text: '看完了。平时点「下一步」就行。' })
     })()
     return () => { alive = false }
   }, [s.demo])
