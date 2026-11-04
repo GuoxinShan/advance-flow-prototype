@@ -1,11 +1,17 @@
 # 推进链路原型 · advance-flow-prototype
 
-把 **日历 / 讨论（会议室）/ 速记 / 推进 / 灵基** 丝滑串成一条可点击的端到端链路。Vite + React + TypeScript 纯静态 SPA。两条一等入口都落同一份推进模型：
+**推进 = system of record。** 三条并列入口落同一份推进模型；讨论/会议只是可选证据场景；速记 = 证据层（无管理门禁）。**不做会议类型包。**
 
-- **从推进出发**：任务卡「拉个讨论」/ 日历讨论块 → 会议室 → 速记只记录 → 结束页留/丢草稿 → dispatch → 要我定的
-- **从闲聊出发**：⌘K /「跟灵基说」空开讨论或口述；灵基边聊边起草，也可「约个会」写日历时段；结束后同样落推进
+## 产品模型
+1. **三条入口（等价）**
+   - ① **直接建任务** — 跳过会议，可选原话锚点
+   - ② **闲聊落成任务** — ⌘K / 跟灵基说，边聊边起草
+   - ③ **会后从速记拆任务** — 可选开证据场景 → 采证 → 拆到推进
+2. **速记 = 证据层**：原话锚点 · 会中笔记/重点 · AI 稿 + 人工稿素材。不做确认/分派/催办。
+3. **王剑诉求一律走任务**：每条草稿/任务可溯源原话；纪要作产物挂父卡 + 确认子卡；反对标哪一条 → 修改子卡；行动闭环回写产物；跨次带同来源未完成；**目的/共识是任务集字段，不是会议类型**。
 
-视觉：沿用 super-entry-ref / advance-super-entry-plus 的 lgwk 配色与密度，加 soft glass、subtle motion、灵基紫 glow、流式打字。
+## 保留
+角色切换 · 要我定的 · 全部任务 · 云之家只读 · 自动演示（①→②→③+确认）· 灵基侧栏流式。
 
 ```bash
 npm i && npm run dev
@@ -13,17 +19,7 @@ npm run build
 npm run smoke   # Playwright → shots/
 ```
 
-Vercel：项目 Framework 选 Vite；`vercel.json` 只含 SPA rewrite（不含 buildCommand）。
-
-## 怎么玩
-- 首页两张入口卡，或顶栏 ⌘K /「跟灵基说」
-- 右上角切角色：刘洋 / 老王 / 阿炜 / 张三
-- 右侧 **灵基侧栏**：思考中 / 流式输出 / 原话 chip / 建议下一步 pill
-- 再右 **链路** 面板：现有(绿) / 新增(橙) API + 调用记录
-- 「▶ 自动演示」走通 **推进 + 闲聊** 两条入口；「一键重置」；「撤销」
-
-## 链路
-1. 入口（推进或闲聊）→ 2 讨论室速记 → 3 灵基起草 → 4 要我定的 → 5 推进执行 → 6 纪要确认/异议自动派修改单 → 7 验收 → 8 日历回流 / 原话 / 云之家只读
+Vercel：Framework 选 Vite；`vercel.json` **只含 SPA rewrite**（不含 buildCommand）。本仓不自动部署。
 
 ## 结构
-`src/store.ts` 模型 + reducer（含 chat / scheduleMeeting / lingee）；`src/App.tsx` 视图 + ⌘K + 灵基侧栏 + 双路径自动演示；`src/style.css` glass + AI glow。
+`src/store.ts` 模型 + reducer；`src/App.tsx` 视图 + 链路面板 + 三路径自动演示；`src/style.css` glass + AI glow。

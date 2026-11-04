@@ -13,11 +13,17 @@ const role = r => click(`[data-testid=role-${r}]`)
 const nav = t => click(`nav button:has-text("${t}")`)
 await p.goto('http://localhost:4173/'); await p.evaluate(() => localStorage.clear()); await p.reload(); await p.waitForTimeout(400)
 
+// 首页三入口
 await shot('01-focus-home')
-await click('[data-testid=entry-advance]'); await shot('01b-calendar')
-await click('[data-testid=cal-discussion]'); await p.waitForTimeout(4500); await shot('02-room')
+await click('[data-testid=entry-direct]'); await shot('01a-create-direct')
+await p.fill('[data-testid=create-title]', '巡检表字段精简到 12 项')
+await p.fill('[data-testid=create-quote]', '阿炜说周五前出新版字段')
+await click('[data-testid=create-submit]'); await shot('01b-direct-landed')
+
+// 入口③ 证据场景
+await click('[data-testid=entry-steno]'); await shot('01c-calendar')
+await click('[data-testid=cal-discussion]'); await p.waitForTimeout(4500); await shot('02-room-evidence')
 await click('[data-testid=end]'); await click('[data-testid=minutes-toggle]')
-await p.locator('[data-testid=draft] input[type=checkbox]').nth(3).click(); await p.locator('[data-testid=draft] input[type=checkbox]').nth(3).click()
 await shot('03-end-drafts')
 await click('[data-testid=dispatch]'); await shot('04-focus-liuyang')
 await role('阿炜'); await shot('05-focus-awei'); await click('[data-testid=act-take]')
@@ -34,31 +40,33 @@ await role('刘洋'); await nav('要我定的'); await shot('09-review-children'
 while (await p.locator('[data-testid=act-accept]').count()) { await click('[data-testid=act-accept]') }
 await nav('全部任务'); for (let k = 0; k < 4; k++) { const f = p.locator('button.fold:has-text("▸")'); if (await f.count()) await f.first().click() } await shot('10-all-tasks')
 await nav('日历'); await shot('11-calendar-writeback')
-await nav('全部任务'); await click('button.src'); await shot('12-source-highlight')
+await nav('全部任务'); const src = p.locator('button.src'); if (await src.count()) await src.first().click(); await shot('12-source-highlight')
 await nav('云之家只读'); await shot('13-yzj-readonly')
 
-// 闲聊入口
+// 入口② 闲聊落成
 await p.evaluate(() => localStorage.clear()); await p.reload(); await p.waitForTimeout(400)
 await click('[data-testid=cmdk]'); await shot('15-cmdk')
-await click('[data-testid=cmd-sug]'); await p.waitForTimeout(600); await shot('16-chat-discuss')
-await click('[data-testid=chat-pill]'); await p.waitForTimeout(3500); await shot('17-chat-room')
-await click('[data-testid=end]'); await shot('18-chat-end')
-await click('[data-testid=dispatch]'); await shot('19-chat-dispatched')
-await click('[data-testid=cmdk]')
-await p.fill('[data-testid=cmd-input]', '约个会'); await p.keyboard.press('Enter'); await p.waitForTimeout(500)
-await shot('20-chat-meet')
-const meetPill = p.locator('[data-testid=chat-pill]:has-text("确认时段")')
-if (await meetPill.count()) await meetPill.first().click()
-else await click('[data-testid=lingee-pill]')
-await p.waitForTimeout(2000); await shot('21-meet-room')
+await click('[data-testid=cmd-sug]'); await p.waitForTimeout(600); await shot('16-chat-land')
+await click('[data-testid=chat-pill]'); await p.waitForTimeout(500); await shot('17-chat-end')
+await click('[data-testid=dispatch]'); await shot('18-chat-dispatched')
 
-const setDone = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('advance-flow-v2')).tasks.filter(t => t.kind === 'set').map(t => t.state) } catch { return [] } })
+// 闲聊 → 证据场景
+await click('[data-testid=cmdk]')
+await p.fill('[data-testid=cmd-input]', '帮我开一场门店巡检讨论'); await p.keyboard.press('Enter'); await p.waitForTimeout(500)
+await shot('19-chat-discuss')
+const evidPill = p.locator('[data-testid=chat-pill]:has-text("进入证据")')
+if (await evidPill.count()) await evidPill.first().click()
+else await click('[data-testid=chat-pill]')
+await p.waitForTimeout(3500); await shot('20-steno-room')
+await click('[data-testid=end]'); await shot('21-steno-end')
+
+const setDone = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('advance-flow-v3')).tasks.filter(t => t.kind === 'set').map(t => t.state) } catch { return [] } })
 console.log('task set states:', setDone)
 
 await p.evaluate(() => localStorage.clear()); await p.reload(); await p.waitForTimeout(300)
-await click('[data-testid=demo]'); await p.waitForTimeout(52000); await shot('14-auto-demo-end')
-const st = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('advance-flow-v2')) } catch { return null } })
-console.log('demo end view:', st?.view, 'step:', st?.step, 'sets:', st?.tasks?.filter(t => t.kind === 'set').map(t => t.state))
+await click('[data-testid=demo]'); await p.waitForTimeout(48000); await shot('14-auto-demo-end')
+const st = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('advance-flow-v3')) } catch { return null } })
+console.log('demo end view:', st?.view, 'step:', st?.step, 'entry:', st?.entry, 'sets:', st?.tasks?.filter(t => t.kind === 'set').map(t => ({ state: t.state, purpose: !!t.purpose, consensus: t.consensus?.length })))
 console.log('page errors:', errs)
 if (errs.length) process.exitCode = 1
 await b.close(); srv.kill()
