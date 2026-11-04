@@ -60,9 +60,20 @@ const roleLabel = await p.locator('.role-label').innerText()
 if (!roleLabel.includes('当前身份')) { console.error('FAIL: role label', roleLabel); process.exitCode = 1 }
 const entryWall = await p.locator('[data-testid=entry-direct]').count()
 if (entryWall) { console.error('FAIL: entry cards should be gone'); process.exitCode = 1 }
-const railOpen = await p.locator('[data-testid=lingee-rail]').count()
-if (railOpen) { console.error('FAIL: lingee should start as bubble'); process.exitCode = 1 }
+await p.locator('[data-testid=work-pane]').waitFor()
 await p.locator('[data-testid=lingee-open]').waitFor()
+const paneHome = await p.locator('[data-testid=work-pane]').innerText()
+if (!paneHome.includes('跟灵基说')) {
+  console.error('FAIL: lingee should be a labeled dock in the work pane', paneHome.slice(0, 180)); process.exitCode = 1
+}
+if (await p.locator('.ov-mask, .cmd-mask, .lingee-fab, [data-testid=overlay]').count()) {
+  console.error('FAIL: home still has floating overlay chrome'); process.exitCode = 1
+}
+const boardBox = await p.locator('[data-testid=board]').boundingBox()
+const paneBox = await p.locator('[data-testid=work-pane]').boundingBox()
+if (!boardBox || !paneBox || paneBox.x < boardBox.x + 180) {
+  console.error('FAIL: expected board | work pane split', boardBox, paneBox); process.exitCode = 1
+}
 await click('[data-testid=tip-dismiss]')
 if (await p.locator('[data-testid=first-run-tip]').count()) {
   console.error('FAIL: tip should dismiss'); process.exitCode = 1
@@ -72,10 +83,20 @@ await click('[data-testid=show-tip]')
 await p.locator('[data-testid=first-run-tip]').waitFor()
 await click('[data-testid=tip-dismiss]')
 
-// 下一步 → 新建浮层
+// 蓝色按钮 → 右侧工作区里的新建，看板仍在左侧
 await click('[data-testid=next-step]'); await shot('01a-create-direct')
+await p.locator('[data-testid=work-pane] [data-testid=create-view]').waitFor()
+if (await p.locator('.ov-mask, [data-testid=overlay]').count()) {
+  console.error('FAIL: create opened as a modal'); process.exitCode = 1
+}
+const boardOpen = await p.locator('[data-testid=board]').boundingBox()
+const createBox = await p.locator('[data-testid=create-view]').boundingBox()
+if (!boardOpen || !createBox || createBox.x < boardOpen.x + boardOpen.width * 0.55) {
+  console.error('FAIL: create should sit inline beside the board', boardOpen, createBox); process.exitCode = 1
+}
 await p.fill('[data-testid=create-title]', '巡检表字段精简到 12 项')
 await p.fill('[data-testid=create-quote]', '阿炜说周五前出新版字段')
+await shot('02-inline-work')
 await click('[data-testid=create-submit]'); await shot('01b-direct-landed')
 const afterCreate = await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('advance-flow-v7')); return { view: s.view, overlay: s.overlay, flowStep: s.flowStep } })
 console.log('after create', afterCreate)
@@ -86,6 +107,13 @@ if (afterCreateCta === '下一步' || afterCreateCta.startsWith('下一步')) {
 }
 const afterRows = await p.locator('[data-testid=frow]').count()
 if (afterRows < 1) { console.error('FAIL: created task should appear on board for creator, rows=', afterRows); process.exitCode = 1 }
+if (await p.locator('[data-testid=create-view]').count()) {
+  console.error('FAIL: create pane should close after submit'); process.exitCode = 1
+}
+const summary = await p.locator('[data-testid=summary-strip]').innerText()
+if (!summary.includes('看板') || !summary.includes('巡检表')) {
+  console.error('FAIL: summary strip should report the write-back', summary); process.exitCode = 1
+}
 await shot('01c-create-visible')
 
 // 开讨论：灵基气泡 → 会后从速记拆
@@ -94,9 +122,12 @@ await p.waitForTimeout(200)
 const stenoPill = p.locator('[data-testid=lingee-pill]:has-text("速记")')
 if (await stenoPill.count()) await stenoPill.first().click()
 else {
-  await click('[data-testid=lingee-close]')
   await moreNav('calendar')
   await click('[data-testid=pull-discussion]')
+}
+await p.locator('[data-testid=work-pane] [data-testid=room-view]').waitFor({ timeout: 8000 })
+if (await p.locator('.ov-mask, [data-testid=overlay]').count()) {
+  console.error('FAIL: discussion opened as a modal'); process.exitCode = 1
 }
 await p.waitForTimeout(4500); await shot('02-room-evidence')
 await click('[data-testid=end]'); await click('[data-testid=minutes-toggle]')
@@ -132,6 +163,11 @@ await click('[data-testid=next-step]') // may open create — we want chat
 // Reset and go: next opens create; close and force chat via cmd from keyboard
 await p.keyboard.press('Escape')
 await p.keyboard.press('Meta+k')
+await p.locator('[data-testid=cmd-palette]').waitFor()
+const cmdPos = await p.locator('[data-testid=cmd-palette]').evaluate(el => getComputedStyle(el).position)
+if (cmdPos === 'fixed' || await p.locator('.cmd-mask').count()) {
+  console.error('FAIL: chat ask should be inline, position=', cmdPos); process.exitCode = 1
+}
 await shot('15-cmdk')
 await click('[data-testid=cmd-sug]'); await p.waitForTimeout(600); await shot('16-chat-land')
 const chatState = await p.evaluate(() => { const s = JSON.parse(localStorage.getItem('advance-flow-v7')); return { view: s.view, overlay: s.overlay, chat: s.chat?.length } })
