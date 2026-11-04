@@ -151,7 +151,7 @@ export default function App() {
             <button className="ghost sm role-btn" data-testid="role-menu" onClick={() => { setRoleOpen(v => !v); setMoreOpen(false) }}>
               <Av who={s.role} s="s20" />{s.role}
             </button>
-            <span className="role-hint" data-testid="role-hint">切换身份可看确认/验收</span>
+            <span className="role-hint" data-testid="role-hint" title="切换身份可看确认/验收">可切换</span>
             {roleOpen && <div className="menu glass" data-testid="role-menu-panel">
               <p className="role-tip">演示切换身份，才能看到确认 / 验收</p>
               {ROLES.map(r => <button key={r.name} data-testid={`role-${r.name}`} className={s.role === r.name ? 'on' : ''} onClick={() => { dispatch({ type: 'role', role: r.name }); setRoleOpen(false) }}><Av who={r.name} s="s20" />{r.name}<small>{r.tag}</small></button>)}
@@ -162,7 +162,7 @@ export default function App() {
 
       {tipOn && (
         <div className="tip-banner" data-testid="first-run-tip" role="status">
-          <span>用法：点蓝色按钮做当前这一步，表单在右侧工作区，看板一直留在左边。跟灵基说也在右侧，用来闲聊落成。更多里是日历和归档（关掉后可在「更多 → 显示用法」找回）。</span>
+          <span>点蓝色按钮做当前这一步；表单和灵基对话在右侧，看板留在左边。日历等归档在「更多」。</span>
           <button className="ghost sm" data-testid="tip-dismiss" onClick={dismissTip} aria-label="关闭提示">知道了</button>
         </div>
       )}
