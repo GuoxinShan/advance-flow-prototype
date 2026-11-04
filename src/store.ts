@@ -33,7 +33,7 @@ export interface Draft {
 export interface CalEvent { id: string; day: string; start: number; end: number; title: string; kind: 'meeting' | 'discussion' | 'deadline' | 'next'; taskId?: string }
 export interface ApiLog { api: string; status: '现有' | '新增'; note: string; at: number }
 export type View = 'focus' | 'calendar' | 'steno' | 'tasks' | 'yzj'
-export type Overlay = null | 'create' | 'chat' | 'room' | 'end'
+export type Overlay = null | 'create' | 'chat' | 'room' | 'end' | 'confirm' | 'accept'
 export type FlowStep = 1 | 2 | 3 | 4 | 5
 export const FLOW_STEPS: { n: FlowStep; name: string }[] = [
   { n: 1, name: '建任务' },
@@ -79,6 +79,10 @@ export interface S {
   drafts: Draft[]; minutesOn: boolean; tasks: Task[]; events: CalEvent[]; log: ApiLog[]
   highlight?: number; toast?: string; demo: boolean; minutesDoc?: string[]
   entry: Entry; chat: ChatMsg[]; cmdOpen: boolean; lingee: LingeeState
+  /** 工作区正在处理的那一条（确认 / 验收） */
+  activeId?: string
+  /** 步骤写回看板后的一句结果，贴在看板上 */
+  summary?: string
   pendingSlot?: { day: string; start: number; title: string } | null
   evidence: StenoEvidence
   createForm: { title: string; assignee: Who; due: string; quote: string }
@@ -113,7 +117,7 @@ export const initial = (): S => ({
   entry: null, chat: [], cmdOpen: false,
   lingee: {
     open: false, phase: 'ready',
-    stream: '先点蓝色按钮「新建一条任务」。要闲聊或拆讨论，再点我。',
+    stream: '先点蓝色按钮「新建一条任务」，表单在右边工作区。想闲聊落成，就在这里跟我说。',
     pills: ['直接建任务', '帮我记下几件事', '开一场讨论采证'], quote: undefined, note: '待命',
   },
   pendingSlot: null,
@@ -124,7 +128,8 @@ export const initial = (): S => ({
 })
 
 export type A =
-  | { type: 'role'; role: Role } | { type: 'view'; view: View } | { type: 'overlay'; overlay: Overlay } | { type: 'closeOverlay' } | { type: 'reset' }
+  | { type: 'role'; role: Role } | { type: 'view'; view: View } | { type: 'overlay'; overlay: Overlay; taskId?: string } | { type: 'closeOverlay' } | { type: 'reset' }
+  | { type: 'summary'; text?: string }
   | { type: 'startDiscussion'; title: string; source?: string; boundTask?: string; fromChat?: boolean }
   | { type: 'line' } | { type: 'end' } | { type: 'toggleMinutes' }
   | { type: 'keep'; id: string } | { type: 'editDraft'; id: string; title: string } | { type: 'draftAssignee'; id: string; who: Who }
@@ -185,6 +190,7 @@ function respondChat(s: S, text: string) {
   s.chat.push({ id: nid('u'), role: 'user', text: t })
   s.entry = 'chat'
   s.overlay = 'chat'
+  s.summary = undefined
   s.view = 'focus'
   s.cmdOpen = false
   s.lingee.open = true
@@ -264,7 +270,12 @@ export function reduce(prev: S, a: A): S {
   const s: S = structuredClone(prev)
   const T = (id: string) => s.tasks.find(t => t.id === id)!
   switch (a.type) {
-    case 'role': s.role = a.role; break
+    case 'role':
+      s.role = a.role
+      s.summary = undefined
+      s.overlay = null
+      s.activeId = undefined
+      break
     case 'view':
       s.view = a.view
       s.overlay = null
@@ -276,19 +287,40 @@ export function reduce(prev: S, a: A): S {
       break
     case 'overlay':
       s.overlay = a.overlay
+      s.activeId = a.taskId
+      s.view = 'focus'
+      if (a.overlay) s.summary = undefined
       if (a.overlay === 'create') {
-        s.entry = 'direct'; s.step = Math.max(s.step, 1); bumpFlow(s, 1)
-        setLingee(s, { phase: 'ready', stream: '填标题，点大按钮就进看板。', note: '新建', pills: ['创建到推进'], quote: undefined })
+        s.entry = 'direct'; s.step = Math.max(s.step, 1); bumpFlow(s, 1); s.cmdOpen = false
+        setLingee(s, { phase: 'ready', stream: '填标题，点下面按钮就写进左侧看板。', note: '新建', pills: ['创建到推进'], quote: undefined })
       }
-      if (a.overlay === 'chat') { s.entry = 'chat'; s.lingee.open = true; bumpFlow(s, 2) }
+      if (a.overlay === 'chat') { s.entry = 'chat'; s.lingee.open = true; bumpFlow(s, 2); s.cmdOpen = true }
+      if (a.overlay === 'confirm') { bumpFlow(s, 4); s.cmdOpen = false }
+      if (a.overlay === 'accept') { bumpFlow(s, 5); s.cmdOpen = false }
+      if (a.overlay === null) { s.activeId = undefined; s.cmdOpen = false }
       break
     case 'closeOverlay':
       s.overlay = null
+      s.activeId = undefined
+      s.cmdOpen = false
       s.view = 'focus'
       s.returnHint = undefined
+      if (s.lingee.note === '新建') {
+        setLingee(s, {
+          phase: 'ready', note: '待命', quote: undefined,
+          stream: '先点蓝色按钮「新建一条任务」，表单在右边工作区。想闲聊落成，就在这里跟我说。',
+          pills: ['直接建任务', '帮我记下几件事', '开一场讨论采证'],
+        })
+      }
+      break
+    case 'summary':
+      s.summary = a.text
       break
     case 'reset': return initial()
-    case 'cmd': s.cmdOpen = a.open; break
+    case 'cmd':
+      s.cmdOpen = a.open
+      if (a.open) { s.view = 'focus'; s.lingee.open = true }
+      break
     case 'lingeeToggle': s.lingee.open = !s.lingee.open; break
     case 'lingeeTick':
       setLingee(s, {
@@ -316,8 +348,10 @@ export function reduce(prev: S, a: A): S {
       if (s.createForm.due) s.events.push({ id: nid('ev'), day: s.createForm.due, start: 18, end: 18.5, title: `截止 · ${title}`, kind: 'deadline' })
       log(s, 'POST /items {entry:direct}', '现有', `直接建任务「${title}」`)
       s.createForm = { title: '', assignee: '阿炜', due: '2026-11-07', quote: '' }
-      s.overlay = null; s.view = 'focus'; s.step = 4; bumpFlow(s, 1); s.toast = '已直接建到推进 · 留在看板'
-      setLingee(s, { phase: 'ready', stream: `「${title}」已进看板。蓝按钮会告诉你下一步动词，或点我继续。`, note: '已新建', pills: ['闲聊落成', '会后从速记拆'], quote: quote || undefined })
+      s.overlay = null; s.activeId = undefined; s.view = 'focus'; s.step = 4; bumpFlow(s, 1)
+      s.summary = `已写进看板 · 「${title}」`
+      s.toast = '已写到左侧看板'
+      setLingee(s, { phase: 'ready', stream: `「${title}」已在左侧看板。蓝按钮是下一步；也可以继续跟我说。`, note: '已新建', pills: ['闲聊落成', '会后从速记拆'], quote: quote || undefined })
       break
     }
     case 'addNote': {
@@ -399,19 +433,20 @@ export function reduce(prev: S, a: A): S {
       s.entry = 'chat'
       s.view = 'focus'
       s.overlay = 'end'
+      s.summary = undefined
       s.step = 3
       bumpFlow(s, 2)
       setLingee(s, {
         phase: 'ready', stream: '勾选要的，点大按钮派出。',
         note: '闲聊落成', pills: [], quote: '来自闲聊',
       })
-      log(s, 'POST /drafts {from:chat} → board overlay', '新增', '闲聊落成 · 看板浮层确认')
+      log(s, 'POST /drafts {from:chat} → work pane', '新增', '闲聊落成 · 工作区确认后写回看板')
       break
     }
     case 'startDiscussion': {
       s.discussion = { title: a.title, source: a.source, boundTask: a.boundTask, fromChat: a.fromChat }
       s.entry = 'steno'
-      s.view = 'focus'; s.overlay = 'room'; s.step = 2; bumpFlow(s, 3); s.lines = 0; s.recording = true; s.cmdOpen = false
+      s.view = 'focus'; s.overlay = 'room'; s.summary = undefined; s.step = 2; bumpFlow(s, 3); s.lines = 0; s.recording = true; s.cmdOpen = false
       s.evidence = emptyEvidence()
       // 跨次：同来源未完成带进
       const ref = SOURCE_KEY
@@ -446,7 +481,7 @@ export function reduce(prev: S, a: A): S {
       }
       break
     case 'end': {
-      s.recording = false; s.lines = TRANSCRIPT.length; s.view = 'focus'; s.overlay = 'end'; s.step = 3; s.entry = 'steno'; bumpFlow(s, 3)
+      s.recording = false; s.lines = TRANSCRIPT.length; s.view = 'focus'; s.overlay = 'end'; s.summary = undefined; s.step = 3; s.entry = 'steno'; bumpFlow(s, 3)
       log(s, `GET /steno/${STENO_ID}/transcript`, '现有', '读速记全文（证据）')
       log(s, 'POST /drafts {from:steno}', '新增', '会后从速记拆任务 · 草稿+原话锚点')
       s.evidence.aiDraft = TRANSCRIPT.filter((_, i) => [1, 2, 3, 5].includes(i)).map(l => l.text)
@@ -509,10 +544,13 @@ export function reduce(prev: S, a: A): S {
       s.events.push({ id: nid('ev'), day: '2026-11-06', start: 15, end: 16, title: '下次讨论 · 看试点数据', kind: 'next', taskId: pid })
       log(s, `dispatch-batch (${s.drafts.filter(d => d.keep).length} 件)`, '现有', '批量派发 · 父子 + 原话来源 + 目的/共识字段')
       log(s, 'calendar.writeback', '新增', '截止日与下次讨论写回日历')
-      s.drafts = []; s.overlay = null; s.view = 'focus'; s.step = 4; bumpFlow(s, 3); s.toast = '已落进推进 · 留在看板'
+      const sent = s.drafts.filter(d => d.keep).length
+      s.drafts = []; s.overlay = null; s.activeId = undefined; s.view = 'focus'; s.step = 4; bumpFlow(s, 3)
+      s.summary = `已写进看板 · 派出 ${sent} 件`
+      s.toast = '已写到左侧看板'
       setLingee(s, {
         phase: 'ready',
-        stream: '已派出。切角色继续确认/验收。',
+        stream: '已派出，左侧看板已更新。切角色继续确认或验收。',
         note: '已派发', pills: ['切到阿炜', '闲聊落成'], quote: undefined,
       })
       break
@@ -543,8 +581,18 @@ export function reduce(prev: S, a: A): S {
       setLingee(s, { phase: 'ready', stream: '纪要已作产物挂在父卡。发给确认人？异议请标「反对哪一条」——我派修改子卡。', note: '产物交稿', pills: ['发给确认人'], quote: s.minutesDoc[0] })
       break
     }
-    case 'accept': { const t = T(a.id); t.state = 'done'; s.step = Math.max(s.step, 7); bumpFlow(s, 5); log(s, `POST /items/${t.id}/accept`, '现有', '验收通过'); if (t.kind === 'set') s.step = 8; rollup(s); break }
-    case 'return': { const t = T(a.id); t.state = 'in_progress'; t.comments.push({ by: s.role, text: '退回：再补充一下', at: '16:30' }); log(s, `POST /items/${t.id}/return`, '现有', '退回给负责人'); break }
+    case 'accept': {
+      const t = T(a.id); t.state = 'done'; s.step = Math.max(s.step, 7); bumpFlow(s, 5)
+      log(s, `POST /items/${t.id}/accept`, '现有', '验收通过'); if (t.kind === 'set') s.step = 8
+      s.overlay = null; s.activeId = undefined; s.summary = `已验收 · ${t.title}`; s.toast = '验收已写回看板'
+      rollup(s); break
+    }
+    case 'return': {
+      const t = T(a.id); t.state = 'in_progress'; t.comments.push({ by: s.role, text: '退回：再补充一下', at: '16:30' })
+      log(s, `POST /items/${t.id}/return`, '现有', '退回给负责人')
+      s.overlay = null; s.activeId = undefined; s.summary = `已退回 · ${t.title}`; s.toast = '已退回，看板已更新'
+      break
+    }
     case 'assign': { const t = T(a.id); t.assignee = a.who; log(s, `PATCH /items/${t.id} assignee`, '现有', `指派给 ${a.who}`); break }
     case 'ack': { const t = T(a.id); t.ackLingee = true; t.comments.push({ by: s.role, text: '先排除，单独列出来', at: '16:00' }); log(s, `POST /items/${t.id}/comments`, '现有', '回复灵基'); break }
     case 'sendConfirm': {
@@ -556,10 +604,15 @@ export function reduce(prev: S, a: A): S {
         })
       }
       log(s, `POST /minutes/${t.id}/confirm {to:[老王,阿炜]}`, '新增', '纪要产物 · 1:1 确认子卡')
-      setLingee(s, { stream: '已发确认子卡。有人反对某条，我会按「反对标哪一条」派修改子卡。', note: '等确认', pills: [] })
+      s.overlay = null; s.activeId = undefined; s.summary = '已发给确认人 · 看板已更新'; s.toast = '确认已写到看板'
+      setLingee(s, { stream: '已发确认子卡，左侧看板能看到。有人反对某条，我会按「反对标哪一条」派修改子卡。', note: '等确认', pills: [] })
       break
     }
-    case 'confirm': { const t = T(a.id); t.state = 'done'; bumpFlow(s, 4); log(s, `PATCH /items/${t.id} done`, '现有', `${t.assignee} 确认无误`); rollup(s); break }
+    case 'confirm': {
+      const t = T(a.id); t.state = 'done'; bumpFlow(s, 4); log(s, `PATCH /items/${t.id} done`, '现有', `${t.assignee} 确认无误`)
+      s.overlay = null; s.activeId = undefined; s.summary = `已确认 · ${t.title}`; s.toast = '确认已写回看板'
+      rollup(s); break
+    }
     case 'object': {
       const t = T(a.id)
       const target = a.target || '第 2 条 · 拍照上传改为必填'
@@ -573,7 +626,8 @@ export function reduce(prev: S, a: A): S {
         source: t.source, due: TODAY, objectTarget: target,
       })
       log(s, 'lingee.autoDispatch(修改纪要 → 刘洋)', '新增', `反对「${target}」→ 修改子卡`)
-      setLingee(s, { phase: 'ready', stream: `收到反对「${target}」：「${a.text}」。已派修改子卡给刘洋。`, note: '反对 → 修改子卡', pills: ['切到刘洋'], quote: a.text })
+      s.overlay = null; s.activeId = undefined; s.summary = `已记下反对 · ${target}`; s.toast = '反对已写回看板'
+      setLingee(s, { phase: 'ready', stream: `收到反对「${target}」：「${a.text}」。修改任务已出现在看板上。`, note: '反对 → 修改子卡', pills: ['切到刘洋'], quote: a.text })
       break
     }
     case 'revised': {
@@ -585,6 +639,7 @@ export function reduce(prev: S, a: A): S {
       const minutes = s.tasks.find(t => t.id === r.parentId)
       if (minutes) minutes.product = '纪要 v2（已按异议修订）'
       log(s, `PATCH /items/${cf?.id} reconfirm`, '新增', `改好后重新发给 ${objector} · 产物回写 v2`)
+      s.overlay = null; s.activeId = undefined; s.summary = '已改好，重新发给确认人'; s.toast = '修改已写回看板'
       rollup(s); break
     }
     case 'nudge': { const t = T(a.id); t.nudged = true; log(s, `POST /items/${t.id}/nudge`, '现有', `催一下 ${t.assignee}`); break }

@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState, useCallback } from 'react'
+import { useEffect, useReducer, useRef, useState, useCallback, type RefObject } from 'react'
 import { A, ADV_ID, FLOW_STEPS, FlowStep, initial, Overlay, reduce, ROLES, S, STATE_CN, Task, TODAY, TRANSCRIPT, WEEK, focusRows, FocusRow, Who, TState, STENO_ID } from './store'
 
 const KEY = 'advance-flow-v7'
@@ -6,10 +6,16 @@ type H = { cur: S; past: S[] }
 function hreduce(h: H, a: A | { type: 'undo' }): H {
   if (a.type === 'undo') return h.past.length ? { cur: { ...h.past[0], toast: '已撤销' }, past: h.past.slice(1) } : h
   const next = reduce(h.cur, a)
-  const silent = ['line', 'toast', 'demo', 'view', 'role', 'lingeeTick', 'cmd', 'createForm', 'overlay', 'closeOverlay'].includes(a.type)
+  const silent = ['line', 'toast', 'demo', 'view', 'role', 'lingeeTick', 'cmd', 'createForm', 'overlay', 'closeOverlay', 'summary'].includes(a.type)
   return { cur: next, past: silent ? h.past : [h.cur, ...h.past].slice(0, 30) }
 }
-const load = (): H => { try { const v = localStorage.getItem(KEY); if (v) return { cur: { ...JSON.parse(v), demo: false, overlay: null }, past: [] } } catch {} return { cur: initial(), past: [] } }
+const load = (): H => {
+  try {
+    const v = localStorage.getItem(KEY)
+    if (v) return { cur: { ...initial(), ...JSON.parse(v), demo: false, overlay: null, cmdOpen: false, activeId: undefined }, past: [] }
+  } catch { /* ignore broken drafts */ }
+  return { cur: initial(), past: [] }
+}
 
 const avOf = (w: Who) => ROLES.find(r => r.name === w)?.av ?? 'violet'
 const Av = ({ who, s = '' }: { who: Who; s?: string }) => <span className={`av ${s}`} data-av={who === '灵基' ? 'lingee' : avOf(who)}>{who === '灵基' ? '✦' : who ? who.slice(-1) : '?'}</span>
@@ -25,38 +31,52 @@ function Typewriter({ text, active }: { text: string; active?: boolean }) {
   return <span className="tw">{text.slice(0, n)}{active && n < text.length && <i className="caret" />}</span>
 }
 
-/** 看板顶栏唯一主按钮：按状态推进链路 */
-export function nextStep(s: S): { id: string; label: string; run: (dispatch: (a: A) => void) => void } {
+type StepRun = { id: string; label: string; run: (dispatch: (a: A) => void) => void }
+
+/** 顶栏蓝色按钮：当前这一步的动词。进行中的步骤在右侧工作区完成，不盖住看板。 */
+export function nextStep(s: S): StepRun {
+  const openConfirm = (id: string): StepRun => ({ id: 'confirm', label: '确认纪要', run: d => d({ type: 'overlay', overlay: 'confirm', taskId: id }) })
   if (s.overlay === 'create') return { id: 'create', label: '创建到推进', run: d => d({ type: 'createDirect' }) }
-  if (s.overlay === 'room' && s.recording) return { id: 'end', label: '结束并拆任务', run: d => d({ type: 'end' }) }
+  if (s.overlay === 'room') {
+    if (!s.recording && s.drafts.length) return { id: 'back-dispatch', label: '返回确认派出', run: d => d({ type: 'overlay', overlay: 'end' }) }
+    return { id: 'end', label: '结束并拆任务', run: d => d({ type: 'end' }) }
+  }
   if (s.overlay === 'end') return { id: 'dispatch', label: `派出 ${s.drafts.filter(x => x.keep).length || ''} 件`.trim(), run: d => d({ type: 'dispatch' }) }
+  if (s.overlay === 'confirm' && s.activeId) {
+    const t = s.tasks.find(x => x.id === s.activeId)
+    if (t?.kind === 'minutes') return { id: 'sendConfirm', label: '发给确认人', run: d => d({ type: 'sendConfirm', id: t.id }) }
+    if (t) return { id: 'confirm', label: '确认纪要', run: d => d({ type: 'confirm', id: t.id }) }
+  }
+  if (s.overlay === 'accept' && s.activeId) {
+    const id = s.activeId
+    return { id: 'accept', label: '验收完成', run: d => d({ type: 'accept', id }) }
+  }
+  if (s.overlay === 'chat' && s.drafts.length) return { id: 'land', label: '落成推进任务', run: d => d({ type: 'pill', pill: '落成推进任务' }) }
 
   const rows = focusRows(s, s.role)
   const first = (k: FocusRow['kind']) => rows.find(r => r.kind === k)
 
-  // 派出之后：确认 / 验收 / 接下 优先
   const take = first('派给我')
   if (take && (take.task.kind === 'revise' || take.task.source?.type)) {
     if (take.task.kind === 'revise') return { id: 'revised', label: '改好了，重新发确认', run: d => d({ type: 'revised', id: take.task.id }) }
     if (take.task.parentId) return { id: 'take', label: `接下「${take.task.title.slice(0, 10)}」`, run: d => { d({ type: 'setState', id: take.task.id, state: 'in_progress' }); d({ type: 'toast', text: `已接下「${take.task.title}」` }) } }
   }
   const draft = first('灵基交稿')
-  if (draft) return { id: 'sendConfirm', label: '发给确认人', run: d => d({ type: 'sendConfirm', id: draft.task.id }) }
+  if (draft) return { id: 'sendConfirm', label: '发给确认人', run: d => d({ type: 'overlay', overlay: 'confirm', taskId: draft.task.id }) }
   const conf = first('待确认')
-  if (conf) return { id: 'confirm', label: '确认纪要', run: d => d({ type: 'confirm', id: conf.task.id }) }
+  if (conf) return openConfirm(conf.task.id)
   const accept = first('待验收')
-  if (accept) return { id: 'accept', label: '验收完成', run: d => d({ type: 'accept', id: accept.task.id }) }
+  if (accept) return { id: 'accept', label: '验收完成', run: d => d({ type: 'overlay', overlay: 'accept', taskId: accept.task.id }) }
   const due = first('到期')
   if (due) return { id: 'due', label: '提交验收', run: d => d({ type: 'setState', id: due.task.id, state: 'in_review' }) }
   const lingeeDoing = s.tasks.find(t => t.assignee === '灵基' && t.kind === 'minutes' && t.state === 'in_progress')
   if (lingeeDoing) return { id: 'lingeeSubmit', label: '生成纪要稿', run: d => d({ type: 'lingeeSubmit', id: lingeeDoing.id }) }
 
-  // 三条入口按链路发现，不并排三张卡
   const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
   const hasStenoSet = s.tasks.some(t => t.kind === 'set' && t.source?.type === 'steno')
   const hasChatSet = s.tasks.some(t => t.kind === 'set' && t.source?.type === 'chat')
   if (!hasDirect) return { id: 'open-create', label: '新建一条任务', run: d => d({ type: 'overlay', overlay: 'create' }) }
-  if (!hasChatSet) return { id: 'open-chat', label: '把闲聊落成任务', run: d => { if (!s.lingee.open) d({ type: 'lingeeToggle' }); d({ type: 'cmd', open: true }) } }
+  if (!hasChatSet) return { id: 'open-chat', label: '把闲聊落成任务', run: d => d({ type: 'overlay', overlay: 'chat' }) }
   if (!hasStenoSet) return { id: 'open-room', label: '把讨论拆成任务', run: d => d({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID }) }
 
   if (take) return { id: 'take', label: `接下「${take.task.title.slice(0, 10)}」`, run: d => { d({ type: 'setState', id: take.task.id, state: 'in_progress' }); d({ type: 'toast', text: `已接下「${take.task.title}」` }) } }
@@ -105,7 +125,7 @@ export default function App() {
   ]
 
   return (
-    <div className="app simple" data-entry={s.entry ?? 'none'} data-overlay={s.overlay ?? 'none'}>
+    <div className="app simple" data-entry={s.entry ?? 'none'} data-overlay={s.overlay ?? 'none'} data-layout="split">
       <div className="bg-glow" aria-hidden />
       <header className="top glass">
         <div className="brand">
@@ -142,56 +162,37 @@ export default function App() {
 
       {tipOn && (
         <div className="tip-banner" data-testid="first-run-tip" role="status">
-          <span>用法：点蓝色按钮做当前这一步；右边 ✦ 是跟灵基说话；更多里是日历/归档（关掉后可在「更多 → 显示用法」找回）。</span>
+          <span>用法：点蓝色按钮做当前这一步，表单在右侧工作区，看板一直留在左边。跟灵基说也在右侧，用来闲聊落成。更多里是日历和归档（关掉后可在「更多 → 显示用法」找回）。</span>
           <button className="ghost sm" data-testid="tip-dismiss" onClick={dismissTip} aria-label="关闭提示">知道了</button>
         </div>
       )}
 
       <div className="body">
-        <main className="glass-panel board-main">
-          {s.view !== 'focus' && (
+        {s.view === 'focus' ? (
+          <div className={`workspace step-${s.overlay ?? 'idle'}`} data-testid="workspace">
+            <main className="board-main">
+              <div className="col-kicker">看板</div>
+              <Focus s={s} dispatch={dispatch} undo={() => d({ type: 'undo' })} canUndo={h.past.length > 0} />
+            </main>
+            <WorkPane s={s} dispatch={dispatch} chainOpen={chainOpen} onChainClose={() => setChainOpen(false)} />
+          </div>
+        ) : (
+          <main className="glass-panel board-main archive-main">
             <div className="back-bar" data-testid="back-bar">
               <button className="primary sm" data-testid="back-board" onClick={() => dispatch({ type: 'view', view: 'focus' })}>← 回到看板</button>
+              <span className="weak">日历、速记、全部任务都是归档。要办事请回看板。</span>
             </div>
-          )}
-          {s.view === 'focus' && <Focus s={s} dispatch={dispatch} undo={() => d({ type: 'undo' })} canUndo={h.past.length > 0} />}
-          {s.view === 'calendar' && <Calendar s={s} dispatch={dispatch} />}
-          {s.view === 'steno' && <StenoArchive s={s} dispatch={dispatch} />}
-          {s.view === 'tasks' && <AllTasks s={s} dispatch={dispatch} />}
-          {s.view === 'yzj' && <Yzj s={s} />}
-        </main>
-        {s.lingee.open && <LingeeRail s={s} dispatch={dispatch} />}
-        {!s.lingee.open && (
-          <button className="lingee-fab" data-testid="lingee-open" onClick={() => dispatch({ type: 'lingeeToggle' })}>
-            <span className="spark">✦</span>
-          </button>
+            {s.view === 'calendar' && <Calendar s={s} dispatch={dispatch} />}
+            {s.view === 'steno' && <StenoArchive s={s} dispatch={dispatch} />}
+            {s.view === 'tasks' && <AllTasks s={s} dispatch={dispatch} />}
+            {s.view === 'yzj' && <Yzj s={s} />}
+          </main>
         )}
-        {chainOpen && <Chain s={s} onClose={() => setChainOpen(false)} />}
       </div>
 
-      {s.overlay && s.overlay !== 'chat' && (
-        <OverlayShell title={overlayTitle(s.overlay)} onClose={() => dispatch({ type: 'closeOverlay' })} wide={s.overlay === 'room' || s.overlay === 'end'} primary={
-          s.overlay === 'create' ? { label: '创建到推进', testid: 'create-submit', onClick: () => dispatch({ type: 'createDirect' }) }
-            : s.overlay === 'room' && s.recording ? { label: '结束并拆任务', testid: 'end', onClick: () => dispatch({ type: 'end' }) }
-              : s.overlay === 'end' ? { label: `派出 ${s.drafts.filter(x => x.keep).length} 件`, testid: 'dispatch', onClick: () => dispatch({ type: 'dispatch' }) }
-                : undefined
-        }>
-          {s.overlay === 'create' && <CreateDirect s={s} dispatch={dispatch} />}
-          {s.overlay === 'room' && <Room s={s} dispatch={dispatch} />}
-          {s.overlay === 'end' && <End s={s} dispatch={dispatch} />}
-        </OverlayShell>
-      )}
-
-      {s.cmdOpen && <CmdPalette s={s} dispatch={dispatch} onClose={() => dispatch({ type: 'cmd', open: false })} />}
       {s.toast && <div className="toast glass"><span className="spark">✦</span>{s.toast}<button onClick={() => d({ type: 'undo' })}>撤销</button></div>}
     </div>
   )
-}
-
-function overlayTitle(o: Exclude<Overlay, null | 'chat'>) {
-  if (o === 'create') return '新建任务'
-  if (o === 'room') return '讨论采证'
-  return '确认要派的任务'
 }
 
 function FlowDots({ flowStep }: { flowStep: FlowStep }) {
@@ -207,29 +208,133 @@ function FlowDots({ flowStep }: { flowStep: FlowStep }) {
 
 type P = { s: S; dispatch: (a: A) => void }
 
-function OverlayShell({ title, onClose, children, wide, primary }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; primary?: { label: string; testid: string; onClick: () => void } }) {
-  return <div className="ov-mask" data-testid="overlay" onClick={onClose}>
-    <div className={`ov-panel glass ${wide ? 'wide' : ''}`} onClick={e => e.stopPropagation()}>
-      <div className="ov-head">
-        <h3>{title}</h3>
-        <button className="ghost sm" data-testid="overlay-close" onClick={onClose}>关闭</button>
+function stepTabLabel(o: Overlay): string {
+  if (o === 'create') return '新建任务'
+  if (o === 'room') return '讨论拆'
+  if (o === 'end') return '确认派出'
+  if (o === 'confirm') return '确认'
+  if (o === 'accept') return '验收'
+  return '这一步'
+}
+
+function stepHint(o: Overlay): string {
+  if (o === 'create') return '填完就写到左侧看板'
+  if (o === 'room') return '速记只做证据，拆完回到左侧'
+  if (o === 'end') return '派出后，左侧马上出现这些任务'
+  if (o === 'confirm') return '看完再确认，结果留在看板上'
+  if (o === 'accept') return '通过或退回，都会写回左侧'
+  return '跟灵基说，闲聊也能落成任务'
+}
+
+type PaneMode = 'step' | 'lingee' | 'chain'
+
+function WorkPane({ s, dispatch, chainOpen, onChainClose }: P & { chainOpen: boolean; onChainClose: () => void }) {
+  const stepOn = !!(s.overlay && s.overlay !== 'chat')
+  const [tab, setTab] = useState<PaneMode>('lingee')
+  const cmdRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (chainOpen) setTab('chain')
+    else if (s.cmdOpen || s.overlay === 'chat') setTab('lingee')
+    else if (stepOn) setTab('step')
+    else setTab('lingee')
+  }, [s.overlay, s.cmdOpen, chainOpen, stepOn])
+
+  let mode: PaneMode = 'lingee'
+  if (chainOpen && tab === 'chain' && !s.cmdOpen) mode = 'chain'
+  else if (stepOn && tab === 'step' && !s.cmdOpen) mode = 'step'
+  const action = mode === 'step' ? nextStep(s) : null
+  const showAction = !!(action && s.overlay && s.overlay !== 'chat' && ['create', 'room', 'end', 'confirm', 'accept'].includes(s.overlay))
+
+  useEffect(() => { if (s.cmdOpen) cmdRef.current?.focus() }, [s.cmdOpen, mode])
+
+  return <aside className="work-pane" data-testid="work-pane" aria-label="工作区">
+    <div className="pane-head">
+      <div className="col-kicker">工作区</div>
+      <div className="pane-tabs" role="tablist">
+        {stepOn && <button type="button" role="tab" aria-selected={mode === 'step'} className={mode === 'step' ? 'on' : ''} data-testid="pane-tab-step" onClick={() => { setTab('step'); if (s.cmdOpen) dispatch({ type: 'cmd', open: false }) }}>{stepTabLabel(s.overlay)}</button>}
+        <button type="button" role="tab" aria-selected={mode === 'lingee'} className={mode === 'lingee' ? 'on' : ''} data-testid="lingee-open" onClick={() => setTab('lingee')}>跟灵基说</button>
+        {chainOpen && <button type="button" role="tab" aria-selected={mode === 'chain'} className={mode === 'chain' ? 'on' : ''} onClick={() => setTab('chain')}>链路</button>}
       </div>
-      <div className="ov-body">{children}</div>
-      {primary && <div className="ov-foot"><button className="primary big glow" data-testid={primary.testid} onClick={primary.onClick}>{primary.label}</button></div>}
+    </div>
+    <div className="pane-body">
+      {mode === 'step' && s.overlay && s.overlay !== 'chat' && (
+        <div data-testid="pane-step">
+          <div className="pane-title-row">
+            <h3>{stepTabLabel(s.overlay)}</h3>
+            <button type="button" className="link" data-testid="pane-collapse" onClick={() => dispatch({ type: 'closeOverlay' })}>收起这一步</button>
+          </div>
+          <p className="pane-hint">{stepHint(s.overlay)}</p>
+          {s.overlay === 'create' && <CreateDirect s={s} dispatch={dispatch} />}
+          {s.overlay === 'room' && <Room s={s} dispatch={dispatch} />}
+          {s.overlay === 'end' && <End s={s} dispatch={dispatch} />}
+          {s.overlay === 'confirm' && <ConfirmStep s={s} dispatch={dispatch} />}
+          {s.overlay === 'accept' && <AcceptStep s={s} dispatch={dispatch} />}
+        </div>
+      )}
+      {mode === 'lingee' && (
+        <>
+          {s.cmdOpen && <CmdInline s={s} dispatch={dispatch} inputRef={cmdRef} onClose={() => dispatch({ type: 'cmd', open: false })} />}
+          {(!s.cmdOpen || s.chat.length > 0) && <LingeeRail s={s} dispatch={dispatch} hideComposer={s.cmdOpen} />}
+        </>
+      )}
+      {mode === 'chain' && <Chain s={s} onClose={onChainClose} />}
+    </div>
+    {showAction && action && (
+      <div className="pane-foot">
+        {s.overlay === 'create' ? (
+          <button className="primary glow pane-go" type="submit" form="create-form" data-testid="create-submit">{action.label}</button>
+        ) : (
+          <button className="primary glow pane-go" type="button" data-testid={action.id === 'end' ? 'end' : action.id === 'dispatch' ? 'dispatch' : `pane-${action.id}`} onClick={() => action.run(dispatch)}>{action.label}</button>
+        )}
+      </div>
+    )}
+  </aside>
+}
+
+function ConfirmStep({ s, dispatch }: P) {
+  const t = s.tasks.find(x => x.id === s.activeId)
+  const [obj, setObj] = useState('')
+  const [objTarget, setObjTarget] = useState(OBJ_TARGETS[1])
+  if (!t) return <p className="help">在左侧点一条待确认的纪要，确认表单会留在这里。</p>
+  if (t.kind === 'minutes') return <div data-testid="pane-review">
+    <p className="help">纪要已经作为产物交上来。发给确认人之后，左侧会出现每个人的确认行。</p>
+    <div className="parent">{t.title}</div>
+    {s.minutesDoc && <div className="doc"><h5>纪要</h5><ol>{s.minutesDoc.map((m, i) => <li key={i}>{m}</li>)}</ol></div>}
+  </div>
+  return <div data-testid="pane-confirm-body">
+    <p className="help">看完再点下面的「确认纪要」。要反对，先标哪一条——修改任务会回到看板上。</p>
+    <div className="parent">{t.title}</div>
+    {s.minutesDoc && <div className="doc"><h5>纪要 · 反对请标哪一条</h5><ol>{s.minutesDoc.map((m, i) => <li key={i}>{m}</li>)}</ol></div>}
+    <div className="obj-row">
+      <label>反对哪一条 <select value={objTarget} onChange={e => setObjTarget(e.target.value)}>{OBJ_TARGETS.map(x => <option key={x}>{x}</option>)}</select></label>
+    </div>
+    <div className="pane-object">
+      <input placeholder="异议，例如：便利店先不强制拍照" value={obj} onChange={e => setObj(e.target.value)} data-testid="pane-obj-input" />
+      <button type="button" className="ghost sm" data-testid="pane-object" onClick={() => { dispatch({ type: 'object', id: t.id, text: obj || '拍照必填要分门店类型，便利店先不强制', target: objTarget }); setObj('') }}>提交反对</button>
     </div>
   </div>
 }
 
-function LingeeRail({ s, dispatch }: P) {
+function AcceptStep({ s, dispatch }: P) {
+  const t = s.tasks.find(x => x.id === s.activeId)
+  if (!t) return <p className="help">在左侧点一条待验收的任务。</p>
+  return <div data-testid="pane-accept-body">
+    <p className="help">验收通过后，这条会从左侧待办里完成。没做好就退回，负责人会再看到。</p>
+    <div className="parent">{t.title}</div>
+    <p className="weak">{t.assignee || '没人接'} · {STATE_CN[t.state]}{t.due ? ` · ${t.due.slice(5)} 截止` : ''}</p>
+    <button type="button" className="ghost" data-testid="pane-return" onClick={() => dispatch({ type: 'return', id: t.id })}>退回修改</button>
+  </div>
+}
+
+function LingeeRail({ s, dispatch, hideComposer }: P & { hideComposer?: boolean }) {
   const L = s.lingee
   const [q, setQ] = useState('')
   const bottom = useRef<HTMLDivElement>(null)
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }) }, [s.chat.length, L.stream])
-  return <aside className="lingee-rail glass-panel" data-testid="lingee-rail">
+  return <section className="lingee-rail" data-testid="lingee-rail">
     <div className="lr-head">
       <span className="av" data-av="lingee">✦</span>
-      <div><b>灵基</b><small>{L.note ?? '待命'}</small></div>
-      <button className="icon" data-testid="lingee-close" onClick={() => dispatch({ type: 'lingeeToggle' })} title="收起">✕</button>
+      <div><b>{L.note ?? '待命'}</b></div>
     </div>
     <div className={`lr-status ${L.phase}`}>
       {L.phase === 'thinking' && <><i className="spin" />想一下…</>}
@@ -238,12 +343,12 @@ function LingeeRail({ s, dispatch }: P) {
       {L.phase === 'idle' && <>空闲</>}
     </div>
     <div className="lr-stream">
-      <Typewriter text={L.stream || '…'} active={L.phase === 'streaming' || L.phase === 'ready'} />
+      <Typewriter text={L.stream || '…'} active={L.phase === 'streaming'} />
     </div>
     {L.quote && <button className="quote-chip" onClick={() => dispatch({ type: 'jumpSource', line: Math.max(0, TRANSCRIPT.findIndex(t => t.text === L.quote)) })} data-testid="quote-chip">
       <span>原话</span>「{L.quote.slice(0, 36)}{L.quote.length > 36 ? '…' : ''}」
     </button>}
-    <div className="pills">{L.pills.map(p => <button key={p} className="pill-btn" data-testid="lingee-pill" onClick={() => {
+    {s.chat.length === 0 && <div className="pills">{L.pills.map(p => <button key={p} className="pill-btn" data-testid="lingee-pill" onClick={() => {
       if (p === '结束并拆任务' || p === '结束讨论并起草') dispatch({ type: 'end' })
       else if (p === '派出草稿') dispatch({ type: 'dispatch' })
       else if (p === '打开正式纪要') dispatch({ type: 'toggleMinutes' })
@@ -252,10 +357,9 @@ function LingeeRail({ s, dispatch }: P) {
       else if (p === '切到刘洋') dispatch({ type: 'role', role: '刘洋' })
       else if (p === '发给确认人') { const m = s.tasks.find(t => t.kind === 'minutes' && t.state === 'in_review'); if (m) dispatch({ type: 'sendConfirm', id: m.id }) }
       else dispatch({ type: 'pill', pill: p })
-    }}>{p}</button>)}</div>
+    }}>{p}</button>)}</div>}
 
-    <div className="lr-chat" data-testid="rail-chat">
-      {s.chat.length === 0 && <div className="lr-chat-empty">跟我说一句，我帮你落成任务</div>}
+    {s.chat.length > 0 && <div className="lr-chat" data-testid="rail-chat">
       {s.chat.map(m => <div key={m.id} className={`bubble ${m.role}`}>
         {m.role === 'lingee' && <span className="av" data-av="lingee">✦</span>}
         <div>
@@ -265,13 +369,13 @@ function LingeeRail({ s, dispatch }: P) {
         </div>
       </div>)}
       <div ref={bottom} />
-    </div>
-    <form className="chat-input glass rail-input" onSubmit={e => { e.preventDefault(); if (!q.trim()) return; dispatch({ type: 'chatSend', text: q.trim() }); setQ('') }}>
+    </div>}
+    {!hideComposer && <form className="chat-input glass rail-input" onSubmit={e => { e.preventDefault(); if (!q.trim()) return; dispatch({ type: 'chatSend', text: q.trim() }); setQ('') }}>
       <span className="spark">✦</span>
       <input data-testid="chat-input" value={q} onChange={e => setQ(e.target.value)} placeholder="跟灵基说…" />
       <button className="primary sm" type="submit">发送</button>
-    </form>
-  </aside>
+    </form>}
+  </section>
 }
 
 function Chain({ s, onClose }: { s: S; onClose: () => void }) {
@@ -285,52 +389,50 @@ function Chain({ s, onClose }: { s: S; onClose: () => void }) {
     { n: 7, name: '验收' },
     { n: 8, name: '回流归档' },
   ]
-  return <aside className="chain glass-panel" data-testid="chain">
-    <div className="lr-head"><h3 style={{ margin: 0 }}>链路</h3><button className="icon" onClick={onClose}>✕</button></div>
+  return <div className="chain" data-testid="chain">
+    <div className="pane-title-row"><h3>链路</h3><button type="button" className="link" onClick={onClose}>收起</button></div>
     <ol>{STEPS.map(st => <li key={st.n} className={st.n === s.step ? 'cur' : st.n < s.step ? 'past' : ''}>
       <b>{st.n}</b><div className="nm">{st.name}</div></li>)}</ol>
-  </aside>
+  </div>
 }
 
-function CmdPalette({ s, dispatch, onClose }: P & { onClose: () => void }) {
+const CHAT_SUGGESTIONS = [
+  { t: '帮我记下：巡检表精简、拍照必填、看板加整改率', d: '闲聊落成任务' },
+  { t: '帮我开一场门店巡检讨论', d: '开讨论采证' },
+  { t: '直接建任务', d: '马上建一条' },
+]
+
+function CmdInline({ s, dispatch, onClose, inputRef }: P & { onClose: () => void; inputRef: RefObject<HTMLInputElement> }) {
   const [q, setQ] = useState('')
-  const ref = useRef<HTMLInputElement>(null)
-  useEffect(() => { ref.current?.focus() }, [])
   const go = (text: string) => { dispatch({ type: 'chatSend', text }); onClose() }
-  const suggestions = [
-    { t: '帮我记下：巡检表精简、拍照必填、看板加整改率', d: '闲聊落成任务' },
-    { t: '帮我开一场门店巡检讨论', d: '开讨论采证' },
-    { t: '直接建任务', d: '马上建一条' },
-  ]
-  return <div className="cmd-mask" data-testid="cmd-palette" onClick={onClose}>
-    <div className="cmd-box glass" onClick={e => e.stopPropagation()}>
-      <div className="cmd-row">
-        <span className="spark">✦</span>
-        <input ref={ref} data-testid="cmd-input" placeholder="跟灵基说…" value={q}
-          onChange={e => setQ(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && q.trim()) go(q.trim()); if (e.key === 'Escape') onClose() }} />
-        <kbd>↵</kbd>
-      </div>
-      <div className="cmd-sugs">
-        {suggestions.map(x => <button key={x.t} data-testid="cmd-sug" onClick={() => x.t === '直接建任务' ? (dispatch({ type: 'overlay', overlay: 'create' }), onClose()) : go(x.t)}><b>{x.t}</b><small>{x.d}</small></button>)}
-      </div>
-      {s.chat.length > 0 && <div className="cmd-recent">最近 · {s.chat.filter(m => m.role === 'user').slice(-2).map(m => m.text).join(' · ')}</div>}
+  return <div className="cmd-inline" data-testid="cmd-palette">
+    <p className="pane-hint">跟灵基说。说完落在这页右侧，任务写回左边。</p>
+    <div className="cmd-row">
+      <span className="spark">✦</span>
+      <input ref={inputRef} data-testid="cmd-input" placeholder="跟灵基说…" value={q}
+        onChange={e => setQ(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && q.trim()) go(q.trim()); if (e.key === 'Escape') onClose() }} />
+      <kbd>↵</kbd>
     </div>
+    <div className="cmd-sugs">
+      {CHAT_SUGGESTIONS.map(x => <button type="button" key={x.t} data-testid="cmd-sug" onClick={() => x.t === '直接建任务' ? (dispatch({ type: 'overlay', overlay: 'create' }), onClose()) : go(x.t)}><b>{x.t}</b><small>{x.d}</small></button>)}
+    </div>
+    {s.chat.length > 0 && <div className="cmd-recent">最近 · {s.chat.filter(m => m.role === 'user').slice(-2).map(m => m.text).join(' · ')}</div>}
   </div>
 }
 
 function CreateDirect({ s, dispatch }: P) {
   const f = s.createForm
   return <div className="create" data-testid="create-view">
-    <p className="help">写标题，点下面大按钮就进看板。负责人可先空着——会作为「没人接」出现在看板。</p>
-    <div className="create-form glass">
+    <p className="help">写标题就行。负责人可以先空着，左侧会显示「没人接」。</p>
+    <form id="create-form" className="create-form" onSubmit={e => { e.preventDefault(); dispatch({ type: 'createDirect' }) }}>
       <label>标题<input data-testid="create-title" value={f.title} onChange={e => dispatch({ type: 'createForm', patch: { title: e.target.value } })} placeholder="例如：巡检表字段精简到 12 项" /></label>
       <label>谁说的（可选）<input data-testid="create-quote" value={f.quote} onChange={e => dispatch({ type: 'createForm', patch: { quote: e.target.value } })} placeholder="方便以后回看" /></label>
       <div className="create-row">
         <label>负责人<select value={f.assignee} onChange={e => dispatch({ type: 'createForm', patch: { assignee: e.target.value as Who } })}>{['', '灵基', ...ROLES.map(r => r.name)].map(n => <option key={n || 'none'} value={n}>{n || '先空着（没人接）'}</option>)}</select></label>
         <label>截止<input type="date" value={f.due} onChange={e => dispatch({ type: 'createForm', patch: { due: e.target.value } })} /></label>
       </div>
-    </div>
+    </form>
   </div>
 }
 
@@ -394,7 +496,7 @@ function Room({ s, dispatch }: P) {
   useEffect(() => { ref.current?.querySelector('.hl')?.scrollIntoView({ block: 'center' }) }, [s.highlight])
   const n = s.lines
   return <div className="room" data-testid="room-view">
-    <p className="help">听着记重点。听完点下面「结束并拆任务」。</p>
+    <p className="help">听着记重点，可以钉原话、写笔记。听完点下面的按钮。</p>
     <div className="people">{ROLES.map(r => <span key={r.name}><Av who={r.name} />{r.name}</span>)}</div>
     {s.carryIn.length > 0 && <div className="carry" data-testid="carry-in">
       <b>上次没做完 {s.carryIn.length} 件</b>
@@ -429,7 +531,7 @@ function Room({ s, dispatch }: P) {
 function End({ s, dispatch }: P) {
   const [edit, setEdit] = useState<string | null>(null)
   return <div className="end" data-testid="end-view">
-    <p className="help">勾选要派的，点下面大按钮派出去。</p>
+    <p className="help">勾选要留下的，也可以改负责人和日期。</p>
     <div className="parent">{s.discussion?.title || '任务集'}</div>
     {s.drafts.map(d => <div key={d.id} className={`draft ${d.keep ? '' : 'drop'}`} data-testid="draft">
       <label className="chk"><input type="checkbox" checked={d.keep} onChange={() => dispatch({ type: 'keep', id: d.id })} />{d.keep ? '要' : '不要'}</label>
@@ -453,8 +555,8 @@ function Focus({ s, dispatch, undo, canUndo }: P & { undo: () => void; canUndo: 
   const lingeeDoing = s.tasks.filter(t => t.assignee === '灵基' && t.state === 'in_progress')
   const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
   const heroSub = hasDirect
-    ? '下面这些在等你定；顶上蓝色按钮继续当前这一步'
-    : '先点顶上蓝色「新建一条任务」；想先看流程，点下面链接'
+    ? '点顶上蓝色按钮，在右侧完成这一步'
+    : '先点顶上蓝色「新建一条任务」，表单在右边，看板留在这里'
   return <div className="focus" data-testid="board">
     <div className="board-hero" data-testid="board-hero">
       <h2>今天要你动手的事</h2>
@@ -467,10 +569,19 @@ function Focus({ s, dispatch, undo, canUndo }: P & { undo: () => void; canUndo: 
       )}
       <span className="weak hero-meta">{s.role} · {TODAY}</span>
     </div>
+    {s.summary && <div className="summary-strip" data-testid="summary-strip" role="status">
+      <i className="ok-dot" aria-hidden />
+      <span>{s.summary}</span>
+      <button type="button" className="ghost sm" data-testid="summary-dismiss" onClick={() => dispatch({ type: 'summary' })}>收起</button>
+    </div>}
     {rows.length === 0 && <div className="empty" data-testid="board-empty">{hasDirect
-      ? <>今天清空了 🎉<div className="empty-hint">点顶上蓝色按钮继续，或右下角 ✦ 跟灵基说</div></>
-      : <>还没有要你定的事<div className="empty-hint">点顶上蓝色「新建一条任务」开始；想先看一遍，点上面链接</div></>}</div>}
-    {rows.map(r => <div key={r.key} className={`frow ${open === r.key ? 'open' : ''}`} data-testid="frow" data-kind={r.kind} onClick={() => setOpen(r.key)}>
+      ? <>今天清空了<div className="empty-hint">点顶上蓝色按钮继续，或在右侧跟灵基说</div></>
+      : <>还没有要你定的事<div className="empty-hint">点顶上蓝色「新建一条任务」，在右侧工作区填写</div></>}</div>}
+    {rows.map(r => <div key={r.key} className={`frow ${open === r.key || s.activeId === r.task.id ? 'open' : ''}`} data-testid="frow" data-kind={r.kind} data-active={s.activeId === r.task.id ? '1' : '0'} onClick={() => {
+      setOpen(r.key)
+      if (r.kind === '待确认' || r.kind === '灵基交稿') dispatch({ type: 'overlay', overlay: 'confirm', taskId: r.task.id })
+      else if (r.kind === '待验收') dispatch({ type: 'overlay', overlay: 'accept', taskId: r.task.id })
+    }}>
       <i className={`dot ${DOT[r.kind]}`} /><span className="kind">{r.kind}</span>
       {r.task.sample && <span className="sample-tag" data-testid="sample-tag">示例（可忽略）</span>}
       <b>{r.task.title}</b><span className="line">{r.line}</span>
