@@ -142,7 +142,7 @@ export default function App() {
 
       {tipOn && (
         <div className="tip-banner" data-testid="first-run-tip" role="status">
-          <span>用法：点蓝色按钮做当前这一步；右边 ✦ 是跟灵基说话；更多里是日历/归档。</span>
+          <span>用法：点蓝色按钮做当前这一步；右边 ✦ 是跟灵基说话；更多里是日历/归档（关掉后可在「更多 → 显示用法」找回）。</span>
           <button className="ghost sm" data-testid="tip-dismiss" onClick={dismissTip} aria-label="关闭提示">知道了</button>
         </div>
       )}
@@ -154,7 +154,7 @@ export default function App() {
               <button className="primary sm" data-testid="back-board" onClick={() => dispatch({ type: 'view', view: 'focus' })}>← 回到看板</button>
             </div>
           )}
-          {s.view === 'focus' && <Focus s={s} dispatch={dispatch} undo={() => d({ type: 'undo' })} />}
+          {s.view === 'focus' && <Focus s={s} dispatch={dispatch} undo={() => d({ type: 'undo' })} canUndo={h.past.length > 0} />}
           {s.view === 'calendar' && <Calendar s={s} dispatch={dispatch} />}
           {s.view === 'steno' && <StenoArchive s={s} dispatch={dispatch} />}
           {s.view === 'tasks' && <AllTasks s={s} dispatch={dispatch} />}
@@ -445,7 +445,7 @@ function End({ s, dispatch }: P) {
 const DOT: Record<string, string> = { 派给我: 'me', 到期: 'time', 没人接: 'other', 灵基回话: 'lingee', 灵基交稿: 'lingee', 待确认: 'me', 待验收: 'me', '没人动·催一下': 'time' }
 const OBJ_TARGETS = ['第 1 条 · 巡检表精简到 12 项', '第 2 条 · 拍照上传改为必填', '第 3 条 · 看板加整改率', '第 4 条 · 试点 3 家店']
 
-function Focus({ s, dispatch, undo }: P & { undo: () => void }) {
+function Focus({ s, dispatch, undo, canUndo }: P & { undo: () => void; canUndo: boolean }) {
   const rows = focusRows(s, s.role)
   const [open, setOpen] = useState<string | null>(null)
   const [obj, setObj] = useState('')
@@ -483,7 +483,7 @@ function Focus({ s, dispatch, undo }: P & { undo: () => void }) {
     </div>)}
     {lingeeDoing.length > 0 && <div className="lingee-doing"><h4><span className="spark">✦</span> 灵基在做</h4>{lingeeDoing.map(t => <div key={t.id} className="ld"><span>{t.title}{t.product ? ` · ${t.product}` : ''}</span>
       {t.kind === 'minutes' && <button className="ghost sm" data-testid="lingee-submit" onClick={() => dispatch({ type: 'lingeeSubmit', id: t.id })}>生成纪要稿</button>}</div>)}</div>}
-    <p className="hint"><button className="link" onClick={undo}>撤销上一步</button></p>
+    {canUndo && <p className="hint"><button className="link" onClick={undo}>撤销上一步</button></p>}
   </div>
 }
 function actions(r: FocusRow, s: S, dispatch: (a: A) => void, obj: string, setObj: (v: string) => void, objTarget: string, setObjTarget: (v: string) => void) {
