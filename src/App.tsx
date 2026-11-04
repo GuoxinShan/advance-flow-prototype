@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState, useCallback } from 'react'
 import { A, ADV_ID, FLOW_STEPS, FlowStep, initial, Overlay, reduce, ROLES, S, STATE_CN, Task, TODAY, TRANSCRIPT, WEEK, focusRows, FocusRow, Who, TState, STENO_ID } from './store'
 
-const KEY = 'advance-flow-v5'
+const KEY = 'advance-flow-v6'
 type H = { cur: S; past: S[] }
 function hreduce(h: H, a: A | { type: 'undo' }): H {
   if (a.type === 'undo') return h.past.length ? { cur: { ...h.past[0], toast: '已撤销' }, past: h.past.slice(1) } : h
@@ -43,9 +43,9 @@ export function nextStep(s: S): { id: string; label: string; run: (dispatch: (a:
   const draft = first('灵基交稿')
   if (draft) return { id: 'sendConfirm', label: '发给确认人', run: d => d({ type: 'sendConfirm', id: draft.task.id }) }
   const conf = first('待确认')
-  if (conf) return { id: 'confirm', label: '确认无误', run: d => d({ type: 'confirm', id: conf.task.id }) }
+  if (conf) return { id: 'confirm', label: '确认纪要', run: d => d({ type: 'confirm', id: conf.task.id }) }
   const accept = first('待验收')
-  if (accept) return { id: 'accept', label: '验收通过', run: d => d({ type: 'accept', id: accept.task.id }) }
+  if (accept) return { id: 'accept', label: '验收完成', run: d => d({ type: 'accept', id: accept.task.id }) }
   const due = first('到期')
   if (due) return { id: 'due', label: '提交验收', run: d => d({ type: 'setState', id: due.task.id, state: 'in_review' }) }
   const lingeeDoing = s.tasks.find(t => t.assignee === '灵基' && t.kind === 'minutes' && t.state === 'in_progress')
@@ -55,16 +55,16 @@ export function nextStep(s: S): { id: string; label: string; run: (dispatch: (a:
   const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
   const hasStenoSet = s.tasks.some(t => t.kind === 'set' && t.source?.type === 'steno')
   const hasChatSet = s.tasks.some(t => t.kind === 'set' && t.source?.type === 'chat')
-  if (!hasDirect) return { id: 'open-create', label: '下一步：新建任务', run: d => d({ type: 'overlay', overlay: 'create' }) }
-  if (!hasChatSet) return { id: 'open-chat', label: '下一步：跟灵基说几句', run: d => { if (!s.lingee.open) d({ type: 'lingeeToggle' }); d({ type: 'cmd', open: true }) } }
-  if (!hasStenoSet) return { id: 'open-room', label: '下一步：开讨论拆任务', run: d => d({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID }) }
+  if (!hasDirect) return { id: 'open-create', label: '新建一条任务', run: d => d({ type: 'overlay', overlay: 'create' }) }
+  if (!hasChatSet) return { id: 'open-chat', label: '把闲聊落成任务', run: d => { if (!s.lingee.open) d({ type: 'lingeeToggle' }); d({ type: 'cmd', open: true }) } }
+  if (!hasStenoSet) return { id: 'open-room', label: '把讨论拆成任务', run: d => d({ type: 'startDiscussion', title: '门店巡检改版对齐', source: `item:${ADV_ID}`, boundTask: ADV_ID }) }
 
   if (take) return { id: 'take', label: `接下「${take.task.title.slice(0, 10)}」`, run: d => { d({ type: 'setState', id: take.task.id, state: 'in_progress' }); d({ type: 'toast', text: `已接下「${take.task.title}」` }) } }
   const empty = first('没人接')
   if (empty) return { id: 'assign', label: '指派给阿炜', run: d => d({ type: 'assign', id: empty.task.id, who: '阿炜' }) }
   const ack = first('灵基回话')
   if (ack) return { id: 'ack', label: '先排除', run: d => d({ type: 'ack', id: ack.task.id }) }
-  return { id: 'open-create2', label: '下一步：再建一个', run: d => d({ type: 'overlay', overlay: 'create' }) }
+  return { id: 'open-create2', label: '再建一条任务', run: d => d({ type: 'overlay', overlay: 'create' }) }
 }
 
 export default function App() {
@@ -74,6 +74,10 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [roleOpen, setRoleOpen] = useState(false)
   const [chainOpen, setChainOpen] = useState(false)
+  const [tipOn, setTipOn] = useState(() => {
+    try { return localStorage.getItem('advance-flow-tip-v1') !== '1' } catch { return true }
+  })
+  const dismissTip = () => { try { localStorage.setItem('advance-flow-tip-v1', '1') } catch {} setTipOn(false) }
   useEffect(() => { localStorage.setItem(KEY, JSON.stringify(s)) }, [s])
   useEffect(() => { if (s.toast) { const t = setTimeout(() => d({ type: 'toast' }), 3500); return () => clearTimeout(t) } }, [s.toast])
   useEffect(() => { if (s.overlay === 'room' && s.recording && s.lines < TRANSCRIPT.length) { const t = setTimeout(() => d({ type: 'line' }), s.demo ? 400 : 900); return () => clearTimeout(t) } }, [s.overlay, s.recording, s.lines, s.demo])
@@ -109,7 +113,7 @@ export default function App() {
           <span className="ai-badge"><i className="spark">✦</i> 灵基</span>
         </div>
         <FlowDots flowStep={s.flowStep} />
-        <button className="primary glow next-cta" data-testid="next-step" onClick={() => step.run(dispatch)}>{step.label || '下一步'}</button>
+        <button className="primary glow next-cta" data-testid="next-step" onClick={() => step.run(dispatch)}>{step.label || '新建一条任务'}</button>
         <div className="top-right">
           <div className="menu-wrap">
             <button className="ghost sm" data-testid="more-btn" onClick={() => { setMoreOpen(v => !v); setRoleOpen(false) }}>更多</button>
@@ -132,6 +136,13 @@ export default function App() {
           <button className="ghost sm" data-testid="demo" onClick={() => { if (!s.demo) { localStorage.removeItem(KEY); dispatch({ type: 'reset' }) } setTimeout(() => dispatch({ type: 'demo', on: !s.demo }), 50) }}>{s.demo ? '停止' : '看一遍怎么用'}</button>
         </div>
       </header>
+
+      {tipOn && (
+        <div className="tip-banner" data-testid="first-run-tip" role="status">
+          <span>用法：点蓝色按钮做当前这一步；右边 ✦ 是跟灵基说话；更多里是日历/归档。</span>
+          <button className="ghost sm" data-testid="tip-dismiss" onClick={dismissTip} aria-label="关闭提示">知道了</button>
+        </div>
+      )}
 
       <div className="body">
         <main className="glass-panel board-main">
@@ -303,12 +314,12 @@ function CmdPalette({ s, dispatch, onClose }: P & { onClose: () => void }) {
 function CreateDirect({ s, dispatch }: P) {
   const f = s.createForm
   return <div className="create" data-testid="create-view">
-    <p className="help">写标题，点下面大按钮就进看板。</p>
+    <p className="help">写标题，点下面大按钮就进看板。负责人可先空着——会作为「没人接」出现在看板。</p>
     <div className="create-form glass">
       <label>标题<input data-testid="create-title" value={f.title} onChange={e => dispatch({ type: 'createForm', patch: { title: e.target.value } })} placeholder="例如：巡检表字段精简到 12 项" /></label>
       <label>谁说的（可选）<input data-testid="create-quote" value={f.quote} onChange={e => dispatch({ type: 'createForm', patch: { quote: e.target.value } })} placeholder="方便以后回看" /></label>
       <div className="create-row">
-        <label>负责人<select value={f.assignee} onChange={e => dispatch({ type: 'createForm', patch: { assignee: e.target.value as Who } })}>{['灵基', ...ROLES.map(r => r.name)].map(n => <option key={n}>{n}</option>)}</select></label>
+        <label>负责人<select value={f.assignee} onChange={e => dispatch({ type: 'createForm', patch: { assignee: e.target.value as Who } })}>{['', '灵基', ...ROLES.map(r => r.name)].map(n => <option key={n || 'none'} value={n}>{n || '先空着（没人接）'}</option>)}</select></label>
         <label>截止<input type="date" value={f.due} onChange={e => dispatch({ type: 'createForm', patch: { due: e.target.value } })} /></label>
       </div>
     </div>
@@ -432,11 +443,26 @@ function Focus({ s, dispatch, undo }: P & { undo: () => void }) {
   const [obj, setObj] = useState('')
   const [objTarget, setObjTarget] = useState(OBJ_TARGETS[1])
   const lingeeDoing = s.tasks.filter(t => t.assignee === '灵基' && t.state === 'in_progress')
+  const hasDirect = s.tasks.some(t => t.source?.type === 'direct')
+  const heroSub = hasDirect
+    ? '下面这些在等你定；顶上蓝色按钮继续当前这一步'
+    : '先建一条任务，或点下面看一遍'
   return <div className="focus" data-testid="board">
-    <div className="vhead"><h2>要我定的</h2><span className="weak">{s.role} · {TODAY}</span></div>
-    {rows.length === 0 && <div className="empty">今天清空了 🎉<div className="empty-hint">点顶上「下一步」，或右下角灵基气泡</div></div>}
+    <div className="board-hero" data-testid="board-hero">
+      <h2>今天要你动手的事</h2>
+      <p className="hero-sub">{heroSub}</p>
+      {!hasDirect && (
+        <button className="link hero-demo" data-testid="hero-demo" onClick={() => {
+          if (!s.demo) { localStorage.removeItem('advance-flow-v6'); dispatch({ type: 'reset' }) }
+          setTimeout(() => dispatch({ type: 'demo', on: !s.demo }), 50)
+        }}>{s.demo ? '停止演示' : '看一遍怎么用'}</button>
+      )}
+      <span className="weak hero-meta">{s.role} · {TODAY}</span>
+    </div>
+    {rows.length === 0 && <div className="empty" data-testid="board-empty">今天清空了 🎉<div className="empty-hint">点顶上蓝色按钮继续，或右下角 ✦ 跟灵基说</div></div>}
     {rows.map(r => <div key={r.key} className={`frow ${open === r.key ? 'open' : ''}`} data-testid="frow" data-kind={r.kind} onClick={() => setOpen(r.key)}>
       <i className={`dot ${DOT[r.kind]}`} /><span className="kind">{r.kind}</span>
+      {r.task.sample && <span className="sample-tag" data-testid="sample-tag">示例</span>}
       <b>{r.task.title}</b><span className="line">{r.line}</span>
       {r.task.source && <button className="src" onClick={e => { e.stopPropagation(); dispatch({ type: 'jumpSource', line: r.task.source!.line ?? 0 }) }}>{r.task.source.label}</button>}
       <span className="acts" onClick={e => e.stopPropagation()}>{actions(r, s, dispatch, obj, setObj, objTarget, setObjTarget)}</span>
@@ -459,10 +485,10 @@ function actions(r: FocusRow, s: S, dispatch: (a: A) => void, obj: string, setOb
     case '没人接': return <select className="sm" defaultValue="" onChange={e => dispatch({ type: 'assign', id: t.id, who: e.target.value as Who })}><option value="" disabled>指派给…</option>{ROLES.map(x => <option key={x.name}>{x.name}</option>)}</select>
     case '灵基回话': return <button className="primary sm" onClick={() => dispatch({ type: 'ack', id: t.id })}>先排除</button>
     case '灵基交稿': return <button className="primary sm" data-testid="act-send-confirm" onClick={() => dispatch({ type: 'sendConfirm', id: t.id })}>发给确认人</button>
-    case '待确认': return <><button className="primary sm" data-testid="act-confirm" onClick={() => dispatch({ type: 'confirm', id: t.id })}>确认无误</button>
+    case '待确认': return <><button className="primary sm" data-testid="act-confirm" onClick={() => dispatch({ type: 'confirm', id: t.id })}>确认纪要</button>
       <input className="sm" placeholder="异议" value={obj} onChange={e => setObj(e.target.value)} data-testid="obj-input" />
       <button className="ghost sm" data-testid="act-object" onClick={() => { dispatch({ type: 'object', id: t.id, text: obj || '拍照必填要分门店类型，便利店先不强制', target: objTarget }); setObj('') }}>反对</button></>
-    case '待验收': return <><button className="primary sm" data-testid="act-accept" onClick={() => dispatch({ type: 'accept', id: t.id })}>验收</button><button className="ghost sm" onClick={() => dispatch({ type: 'return', id: t.id })}>退回</button></>
+    case '待验收': return <><button className="primary sm" data-testid="act-accept" onClick={() => dispatch({ type: 'accept', id: t.id })}>验收完成</button><button className="ghost sm" onClick={() => dispatch({ type: 'return', id: t.id })}>退回</button></>
     case '没人动·催一下': return <button className="ghost sm" onClick={() => dispatch({ type: 'nudge', id: t.id })}>催一下</button>
   }
 }
@@ -502,7 +528,7 @@ function stateBtns(t: Task, s: S, dispatch: (a: A) => void) {
   const go = (st: TState, label: string, id?: string) => <button className="ghost sm" data-testid={id} onClick={() => dispatch({ type: 'setState', id: t.id, state: st })}>{label}</button>
   if (t.assignee === me && t.state === 'suggested' && t.kind === 'task') return go('in_progress', '接下')
   if (t.assignee === me && t.state === 'in_progress' && t.kind === 'task') return go('in_review', '提交验收', 'submit-review')
-  if (t.creator === me && t.state === 'in_review') return <><button className="primary sm" onClick={() => dispatch({ type: 'accept', id: t.id })}>验收</button><button className="ghost sm" onClick={() => dispatch({ type: 'return', id: t.id })}>退回</button></>
+  if (t.creator === me && t.state === 'in_review') return <><button className="primary sm" onClick={() => dispatch({ type: 'accept', id: t.id })}>验收完成</button><button className="ghost sm" onClick={() => dispatch({ type: 'return', id: t.id })}>退回</button></>
   return null
 }
 
@@ -560,7 +586,7 @@ function useDemo(s: S, dispatch: (a: A) => void) {
         if (!alive || !ref.current.demo) return
         fn(); dispatch({ type: 'toast', text: `看一遍 · ${label}` }); await wait(ms)
       }
-      dispatch({ type: 'demo', on: false }); dispatch({ type: 'toast', text: '看完了。平时点「下一步」就行。' })
+      dispatch({ type: 'demo', on: false }); dispatch({ type: 'toast', text: '看完了。平时点蓝色按钮上的动词就行。' })
     })()
     return () => { alive = false }
   }, [s.demo])

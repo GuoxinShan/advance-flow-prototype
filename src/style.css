@@ -270,3 +270,15 @@ blockquote{margin:6px 0 0;padding:4px 8px;border-left:2px solid var(--lingee);ba
 .app.simple .chain{display:block}
 .empty-hint{margin-top:8px;font-size:13px;color:var(--weak)}
 .app.simple .lr-hint{display:none}
+
+/* ===== first-run clarity ===== */
+.tip-banner{display:flex;align-items:center;gap:12px;justify-content:space-between;margin:0 20px 0;padding:10px 14px;border-radius:12px;background:#eef1ff;border:1px solid rgba(73,93,255,.22);color:#24306b;font-size:13px;line-height:1.45;box-shadow:0 4px 16px rgba(73,93,255,.08)}
+.tip-banner span{flex:1}
+.board-hero{margin-bottom:18px;padding:4px 2px 12px;border-bottom:1px solid var(--line2)}
+.board-hero h2{margin:0 0 6px;font-size:22px;letter-spacing:-.02em}
+.hero-sub{margin:0 0 8px;font-size:15px;color:var(--mut);line-height:1.5}
+.hero-meta{font-size:12px}
+.sample-tag{font-size:11px;font-weight:600;color:#495dff;background:#eef1ff;border:1px solid rgba(73,93,255,.25);border-radius:999px;padding:2px 8px}
+.app.simple .body{padding-top:12px}
+
+.hero-demo{display:inline-block;margin:0 0 8px;font-size:14px;font-weight:600}

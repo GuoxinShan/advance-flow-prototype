@@ -20,6 +20,7 @@ export interface Task {
   id: string; title: string; assignee: Who; creator: Role; state: TState; due?: string
   parentId?: string; kind: Kind; source?: Source
   comments: Comment[]; nudged?: boolean; seen?: boolean; rev?: number; ackLingee?: boolean
+  /** 首页示例行：仅作引导，不是真实待办堆 */ sample?: boolean
   /** 任务集/产物字段（不是会议类型） */
   purpose?: string; consensus?: string[]; product?: string
   /** 异议指向的纪要条 */
@@ -94,8 +95,8 @@ const seedTasks = (): Task[] => [
     consensus: ['先试点 3 家店', '表单精简优先'],
   },
   { id: 'adv_1188', title: 'Q4 门店评分口径复核', assignee: '张三', creator: '刘洋', state: 'in_progress', due: '2026-11-03', kind: 'task', comments: [], source: { type: 'steno', ref: SOURCE_KEY, line: 0, label: '来自速记「上周巡检对齐」' } },
-  { id: 'adv_1190', title: '供应商对账异常排查', assignee: '', creator: '刘洋', state: 'suggested', due: '2026-11-06', kind: 'task', comments: [] },
-  { id: 'adv_1193', title: '整理 10 月客诉 Top10', assignee: '灵基', creator: '刘洋', state: 'in_progress', kind: 'task', comments: [{ by: '灵基', text: '客诉数据里有 23 条没有门店编号，要不要先排除？', at: '10:12' }] },
+  // 首页只露出这一条 focus 行，让新人一眼看到「要动手」的样子
+  { id: 'adv_1190', title: '供应商对账异常排查', assignee: '', creator: '刘洋', state: 'suggested', due: '2026-11-06', kind: 'task', comments: [], sample: true },
   { id: 'adv_1195', title: '巡检 App 崩溃率周报', assignee: '老王', creator: '张三', state: 'suggested', due: '2026-11-05', kind: 'task', comments: [], source: { type: 'steno', ref: SOURCE_KEY, line: 2, label: '来自速记「上周巡检对齐」' } },
 ]
 
@@ -114,12 +115,12 @@ export const initial = (): S => ({
   entry: null, chat: [], cmdOpen: false,
   lingee: {
     open: false, phase: 'ready',
-    stream: '点「下一步」跟着走就行。需要时再点右下角灵基气泡。',
+    stream: '先点蓝色按钮「新建一条任务」。要闲聊或拆讨论，再点我。',
     pills: ['直接建任务', '帮我记下几件事', '开一场讨论采证'], quote: undefined, note: '待命',
   },
   pendingSlot: null,
   evidence: emptyEvidence(),
-  createForm: { title: '', assignee: '阿炜', due: '2026-11-07', quote: '' },
+  createForm: { title: '', assignee: '', due: '2026-11-07', quote: '' },
   carryIn: [],
   returnHint: undefined,
 })
@@ -318,7 +319,7 @@ export function reduce(prev: S, a: A): S {
       log(s, 'POST /items {entry:direct}', '现有', `直接建任务「${title}」`)
       s.createForm = { title: '', assignee: '阿炜', due: '2026-11-07', quote: '' }
       s.overlay = null; s.view = 'focus'; s.step = 4; bumpFlow(s, 1); s.toast = '已直接建到推进 · 留在看板'
-      setLingee(s, { phase: 'ready', stream: `「${title}」已进看板。点「下一步」继续，或点右下角灵基。`, note: '已新建', pills: ['闲聊落成', '会后从速记拆'], quote: quote || undefined })
+      setLingee(s, { phase: 'ready', stream: `「${title}」已进看板。蓝按钮会告诉你下一步动词，或点我继续。`, note: '已新建', pills: ['闲聊落成', '会后从速记拆'], quote: quote || undefined })
       break
     }
     case 'addNote': {
